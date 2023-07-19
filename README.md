@@ -27,12 +27,12 @@ TODO
  - [ ] split mesh along udim seams 
  - [ ] partial MaterialX translator
  - [ ] partial Nvidia MDL translator
+ - [ ] -override material.bsa, slipstream attribs for anims from a manually material-ed .bsa file 
 
-Tested: 
- - Python 3.10.12
- - usd-core 23.5
- - numpy 1.2.50
+Tested on: 
+ - Linux
  - MacOS Ventura 13.4
+ - Window 11 Pro 21H2
  - [.usdz](https://developer.apple.com/augmented-reality/quick-look/) files downloaded from Apple, unzipped
  - .usd output from Blender
  - [Nvidia Attic](https://developer.nvidia.com/usd#sample)
@@ -40,17 +40,22 @@ Tested:
 ---
 **Dependencies:**
 
-[usd-core](https://pypi.org/project/usd-core/)
-install Pixar's USD core libraries for Python
+> do NOT install Python 3.11+
+ 
+ - Python >=3.6, <3.11 
 
-numpy used for performant vectorized math
+    - MacOs/Linux: recommended [pyenv](https://github.com/pyenv/pyenv) ( Mac requires homebrew)
 
-Use [pyenv](https://github.com/pyenv/pyenv) to avoid messing up system Python
+    - Windows: recommended-> Microsoft Store version ( getting DLL fail with pyenv-win and python.org ) 
 
-```
-pip install usd-core
-pip install numpy
-```
+Install Pixar's USD Python libraries [usd-core](https://pypi.org/project/usd-core/)
+
+
+>pip install usd-core
+
+Install numpy for performant vectorized math operations
+
+>pip install numpy
 ---
 
 ```
@@ -68,6 +73,27 @@ options:
 
 ```
 
+---
 
+Run oomerunittests.py to confirm that dependencies are met
+```
+python oomerunittest.py
 
+PASSED: oomUsd.Reader.triangulate_ngons()
+PASSED: faceVertexCount
+PASSED: faceVertexIndices
+PASSED: normals
+PASSED: txcoords
+```
+
+## Examples
+>python oomerusd2bella.py --usdfile ./usd/tv_retro/tv_retro.usdc --colordome
+
+![](/images/tv_retro.png)
+
+## Notes
+- .bsa file is written next to .usd file
+- .bsa is overwritten
+- -start/end params force .bsa output to subfolder with name of the .usd file
+- -start/end .bsa files are 5 digit padded
 

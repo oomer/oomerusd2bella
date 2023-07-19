@@ -87,13 +87,17 @@ PASSED: txcoords
 ```
 
 ## Examples
->python oomerusd2bella.py --usdfile ./usd/tv_retro/tv_retro.usdc --colordome
+>python oomerusd2bella.py -usdfile ./usd/Attic_NVIDIA/Attic_NVIDIA.usd 
+![](/images/Attic_NVIDIA.png)
 
+
+>python oomerusd2bella.py -usdfile ./usd/tv_retro/tv_retro.usdc --colordome
 ![](/images/tv_retro.png)
 
 ## Notes
 - .bsa file is written next to .usd file
 - .bsa is overwritten
+- file asset references are written relative to .bsa file
 - -start/end params force .bsa output to subfolder with name of the .usd file
 - -start/end .bsa files are 5 digit padded
 

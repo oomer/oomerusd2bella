@@ -48,7 +48,7 @@ numpy used for performant vectorized math
 Use [pyenv](https://github.com/pyenv/pyenv) to avoid messing up system Python
 
 ```
-pip install pxr
+pip install usd-core
 pip install numpy
 ```
 ---

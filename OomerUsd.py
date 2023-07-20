@@ -38,7 +38,7 @@ class Reader:
     def __init__(   self, 
                     inFile, 
                     _debug=False,
-                    _usdz=False,
+                    _usda=False,
                     _unittest=False,
                 ):
             
@@ -50,7 +50,7 @@ class Reader:
 
         if not _unittest:
             self.stage = Usd.Stage.Open( str( inFile ) )
-            if _usdz: self.stage.Export( "./"+str( Path( inFile).with_suffix( '.usda')))
+            if _usda: self.stage.Export( "./"+str( Path( inFile).with_suffix( '.usda')))
         else:
             self.stage = Usd.Stage.CreateInMemory( inFile )
 
@@ -221,7 +221,10 @@ class Reader:
                         ### SDF_API SdfAssetPath ( const std::string & 	path,
                         ###                        const std::string & 	resolvedPath 
                         ###                      )	
-                        file = Path(absFilePath).relative_to( self.file.parent.resolve() ) ### calculate texture relative to -usdfile path
+                        if (self.file.parent != Path(absFilePath)): ### Use relative path unless in same dir
+                            file = Path(absFilePath).relative_to( self.file.parent.resolve() ) ### calculate texture relative to -usdfile path
+                        else:
+                            file = Path(absFilePath)
                         wrapS = str( each.GetAttribute( 'inputs:wrapS').Get())
                         wrapT = str( each.GetAttribute( 'inputs:wrapT').Get())
                         self.uv_textures[ each] = {} # [ ] one UsdUvTexture becomes 1 bella fileTexture

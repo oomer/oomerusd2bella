@@ -59,16 +59,16 @@ Install numpy for performant vectorized math operations
 ---
 
 ```
-usage: oomerusd2bella [-h] [-usdfile USDFILE] [-start START] [-end END] [--debug] [--colordome] [-subdivision SUBDIVISION]
+usage: oomerusd2bella usdfile [-start START] [-end END] [--debug] [--colordome] [-subdivision SUBDIVISION]
 
 options:
   -h, --help                show this help message and exit
-  -usdfile USDFILE          path to usd file
+  usdfile                   path to usd file
   -start START              sequence start frame
   -end END                  sequence end frame
-  --debug
-  --usda                    output usda
-  --colordome               insert white color dome
+  -debug
+  -usda                    output usda
+  -colordome               insert white color dome
   -subdivision SUBDIVISION  force subdivision level
 
 ```
@@ -87,11 +87,11 @@ PASSED: txcoords
 ```
 
 ## Examples
->python oomerusd2bella.py -usdfile ./usd/Attic_NVIDIA/Attic_NVIDIA.usd 
+>python oomerusd2bella.py ./usd/Attic_NVIDIA/Attic_NVIDIA.usd 
 ![](/images/Attic_NVIDIA.png)
 
 
->python oomerusd2bella.py -usdfile ./usd/tv_retro/tv_retro.usdc --colordome
+>python oomerusd2bella.py ./usd/tv_retro/tv_retro.usdc --colordome
 ![](/images/tv_retro.png)
 
 ## Notes

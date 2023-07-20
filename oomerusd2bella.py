@@ -76,17 +76,21 @@ import OomerUsd     as oomUsd   # USD read routines
 import OomerBella   as oomBella # Bella write routines
 
 parser = argparse.ArgumentParser("oomerusd2bella")
-parser.add_argument('-usdfile', help="path to usd file", default="./usd/rubbertoy.usda", type=str)
+parser.add_argument('usdfile', help="path to usd file", default="./usd/rubbertoy.usda", type=str)
 parser.add_argument('-start', dest="start", help="sequence start frame", default=0 , type=int)
 parser.add_argument('-end', dest="end", help="sequence end frame", default=0, type=int)
-parser.add_argument('--debug', action='store_true') 
-parser.add_argument('--usda', help="output usda", action='store_true')
-parser.add_argument('--colordome', help="insert white color dome", action='store_true')
+parser.add_argument('-debug', action='store_true') 
+parser.add_argument('-usda', help="output usda", action='store_true')
+parser.add_argument('-colordome', help="insert white color dome", action='store_true')
 parser.add_argument('-subdivision', dest="subdivision", help="force subdivision level", default=0, type=int)
 
 args = parser.parse_args()
 start_time=time.time()
 usd_file = Path(args.usdfile)
+
+#if args.usdfile: # TODO delete
+#    print('-usdfile parameter no longer needed, pass file argument directly: oomerusd2bella.py file.usdc')
+#    quit()
 
 if not usd_file.exists():
     print(args.usdfile,"does not exist")
@@ -97,7 +101,7 @@ if not usd_file.suffix in ['.usd','.usdc','.usda','.usdz']:
 
 usdScene = oomUsd.Reader( usd_file, 
                           _debug=args.debug,
-                          _usdz=args.usda,
+                          _usda=args.usda,
                         )
 
 # USD can store animations both transforms and mesh deformations

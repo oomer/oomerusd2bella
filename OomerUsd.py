@@ -418,45 +418,57 @@ class Reader:
         # TEXCOORDS
         # =========
         # Deal with usda's multitude of attribute names where uv coords can be stored
-        # [ 2024 ] Use primvar relationship in USD to determine attribute name
+        # [x] Use primvar relationship in USD to determine attribute name
         # [ 2024 ] found Scales_baby.usda output with multiple UV texcoords2f primvars:body primvars:head
         # [ 2024 ] Blender USD export supports one texture, multiple UV channels ( useful to increase texel density as needed)
         #           Required a mix node for image texture and 2 uvmap nodes
+        dynTxcoordString = 'st' ### fallback 
+        if _prim.HasRelationship( 'material:binding'): 
+            materialRelationship = _prim.GetRelationship( 'material:binding')
+            materialSdfPath = materialRelationship.GetTargets()[0]
+            materialPrim = self.stage.GetPrimAtPath( materialSdfPath)
+            for materialShaderPrims in Usd.PrimRange( materialPrim): ## local traversal
+                infoId = materialShaderPrims.GetAttribute( 'info:id').Get()
+                if infoId == 'UsdPrimvarReader_float2':
+                    usdShadeInput = UsdShade.Shader( materialShaderPrims).GetInput( 'varname') ## resolve to input name
+                    ### Get sdfPath to another prim where value is stored
+                    ### - [ ] Could this be connected to another node, do I need a reursive loop?
+                    connect2 = usdShadeInput.GetAttr().GetConnections()
+                    ### Returns list of input connections
+                    if len(connect2) == 1: # input
+                        sdfPath2 = usdShadeInput.GetAttr().GetConnections()[0] # assuming single connection world 
+                        matPrim2 = self.stage.GetPrimAtPath(sdfPath2.GetPrimPath()) ### Get UsdPrima that at end of this connection
+                        dynTxcoordString = matPrim2.GetAttribute(sdfPath2.name).Get() ### UsdPrim.GetAttribute(  ) 
+                    else: # local value stored on input
+                        dynTxcoordString = usdShadeInput.Get()
+
+        ### - [x] finally realized that the texcoord primvar string is stored in UsdShade graph
         explicitTxcoordIndices = False  
-        if not _prim == False:
-            if _prim.GetAttribute( 'primvars:st' ).IsValid():  # houdini, blender, maya
-                usdTxcoords = _prim.GetAttribute( 'primvars:st' ).Get( time = _timeCode )
-                if _prim.GetAttribute( 'primvars:st:indices' ).IsValid(): # maya stores explicit indices
+        usdTxcoords = False
+        if not _prim == False: 
+            print(dynTxcoordString)
+            if _prim.GetAttribute( 'primvars:' + dynTxcoordString ).IsValid():  # houdini, blender, maya
+                usdTxcoords = _prim.GetAttribute( 'primvars:' + dynTxcoordString ).Get( time = _timeCode )
+                if _prim.GetAttribute( 'primvars:' + dynTxcoordString + ':indices' ).IsValid(): # maya stores explicit indices
                     # Maya writes usd with explicit texcoord indices while Blender and Houdini use implicit texcoords indexing
                     # - [ ] document implicit versus explicit
-                    explicitTxcoordIndices = _prim.GetAttribute( 'primvars:st:indices' ).Get()
-            elif _prim.GetAttribute( 'primvars:Texture_uv' ).IsValid():  # maya?
-                usdTxcoords = _prim.GetAttribute( 'primvars:Texture_uv' ).Get( time = _timeCode )
-                if _prim.GetAttribute( 'primvars:Texture_uv:indices' ).IsValid(): # maya stores explicit indices
-                    # found in t51-helmet.usdc, HU_EVO_RWD_06.usda
-                    explicitTxcoordIndices = _prim.GetAttribute( 'primvars:Texture_uv:indices' ).Get()
-            elif _prim.GetAttribute( 'primvars:UVMap' ).IsValid():  # blender
-                usdTxcoords = _prim.GetAttribute( 'primvars:UVMap' ).Get( time = _timeCode )
-            elif _prim.GetAttribute( 'primvars:Texture' ).IsValid():  # modo
-                usdTxcoords = _prim.GetAttribute( 'primvars:Texture' ).Get( time = _timeCode )
-            elif _prim.GetAttribute( 'primvars:texture' ).IsValid():  # blender
-                usdTxcoords = _prim.GetAttribute( 'primvars:texture' ).Get( time = _timeCode )
-            elif _prim.GetAttribute( 'primvars:uv' ).IsValid():  # houdini
-                usdTxcoords = _prim.GetAttribute( 'primvars:uv' ).Get( time = _timeCode )
-            else:  # disable uvw
-                usdTxcoords = False
+                    explicitTxcoordIndices = _prim.GetAttribute( 'primvars:' + dynTxcoordString + ':indices' ).Get()
         else: ## unittest
             usdTxcoords = _usdTxcoords
-
+ 
         ### NORMALS
-        ###========
+        ###======== tv_retro.usda = normals t51-helmet.usda = primvars:normals : - [ ] why two string tokens?
         explicitNormalIndices = False
         usdNormals = False
         if not _prim == False:
-            if _prim.GetAttribute( 'primvars:normals' ).IsValid(): # TODO Shouldn't access raw attrib, need pxr wrapper
+            if _prim.GetAttribute( 'primvars:normals' ).IsValid(): # TODO Shouldn't access raw attrib, need pxr wrapper: same reason why texcoords was switched, may not apply in this case
                 usdNormals = _prim.GetAttribute( 'primvars:normals' ).Get( time = _timeCode )
                 if _prim.GetAttribute( 'primvars:normals:indices' ).IsValid(): 
                     explicitNormalIndices = _prim.GetAttribute( 'primvars:normals:indices' ).Get()
+            elif _prim.GetAttribute( 'normals' ).IsValid(): # TODO Shouldn't access raw attrib, need pxr wrapper
+                usdNormals = _prim.GetAttribute( 'normals' ).Get( time = _timeCode )
+                if _prim.GetAttribute( 'normals:indices' ).IsValid(): 
+                    explicitNormalIndices = _prim.GetAttribute( 'normals:indices' ).Get()
             else:
                 usdNormals = _usdNormals
         else:
@@ -481,11 +493,8 @@ class Reader:
                                                 faceVertexIndices, 
                                                 explicitTxcoordIndices, 
                                             )
-
-
             else:
                 faceVertexCounts, faceVertexIndices = self.triangulate_ngons( faceVertexCounts, faceVertexIndices)
-
             npFaceVertexCounts = np.array( faceVertexCounts, dtype=np.int32) # redata nparray with triangulated version
 
         ### numpy-ify

@@ -82,6 +82,8 @@ parser.add_argument('-end', dest="end", help="sequence end frame", default=0, ty
 parser.add_argument('-debug', action='store_true') 
 parser.add_argument('-usda', help="output usda", action='store_true')
 parser.add_argument('-colordome', help="insert white color dome", action='store_true')
+parser.add_argument('-ignorelights', help="ignorelights", action='store_true')
+parser.add_argument('-ignorematerials', help="ignorematerials", action='store_true')
 parser.add_argument('-subdivision', dest="subdivision", help="force subdivision level", default=0, type=int)
 
 args = parser.parse_args()
@@ -197,8 +199,11 @@ for timeCode in range(startFrame, endFrame, 1):  # usd timecode starts on frame 
 
     ### LIGHTS 
     ###=======
-    for prim in usdScene.lights.keys(): 
-        bsa.writeLight( prim, timeCode)
+    if not args.ignorelights:
+        for prim in usdScene.lights.keys():
+            print(usdScene.lights[prim]['UsdLux'])
+            bsa.writeLight( _lightDict = usdScene.lights[prim], 
+                            _timeCode=timeCode)
 
     ### CAMERA
     ###=======
@@ -214,8 +219,9 @@ for timeCode in range(startFrame, endFrame, 1):  # usd timecode starts on frame 
 
     ### USDPREVIEWSURFACE
     ###==================
-    for prim in usdScene.preview_surfaces.keys():  
-        bsa.writeUberMaterial( prim, usdScene )
+    if not args.ignorematerials:
+        for prim in usdScene.preview_surfaces.keys():  
+            bsa.writeUberMaterial( prim, usdScene )
 
     ### USDUVTEXTURE
     ###============= 

@@ -28,7 +28,7 @@ SOFTWARE.
 from pathlib import Path  # used for cross platform file paths
 
 ## third party modules
-from pxr import Usd, UsdGeom, UsdShade   
+from pxr import Usd, UsdGeom, UsdShade, UsdLux 
 import numpy as np
 
 ## oomer modules
@@ -101,7 +101,7 @@ class Reader:
             self.cam_unit_scale = 1
 
         self.mat4_identity = np.array( [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]], dtype='float64')
-        self.mat4_light = np.array( [[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]], dtype='float64')
+        ###self.mat4_light = np.array( [[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]], dtype='float64') # TODO should this be Bella module?
         self.xform_cache = UsdGeom.XformCache()
 
     def GetAttribute( self, attribute ): # UsdAttribute
@@ -273,23 +273,39 @@ class Reader:
 
             if eachPrim.GetTypeName() == 'SphereLight':
                 self.lights[ eachPrim ] = {}
+                lightPrim = UsdLux.SphereLight( eachPrim)
+                self.lights[ eachPrim][ 'UsdLux'] = lightPrim
 
-            # Sun
+            ### DistantLight
             if eachPrim.GetTypeName() == 'DistantLight':
                 self.lights[ eachPrim ] = {}
-                #self.distant_lights[ each_prim ]['color']  = each_prim.GetAttribute('inputs:color').Get()
-                #self.distant_lights[ each_prim ]['intensity']  = each_prim.GetAttribute('inputs:intensity').Get()
-            # Arealight
+                lightPrim = UsdLux.DistantLight( eachPrim)
+                self.lights[ eachPrim][ 'UsdLux'] = lightPrim
+                self.lights[ eachPrim][ 'angle']  = lightPrim.GetAngleAttr().Get()
+            ### Arealight
             if eachPrim.GetTypeName() == 'RectLight':
                 self.lights[ eachPrim ] = {}
+                lightPrim = UsdLux.RectLight( eachPrim)
+                self.lights[ eachPrim][ 'UsdLux'] = lightPrim
+                self.lights[ eachPrim][ 'width']  = lightPrim.GetWidthAttr().Get()
+                self.lights[ eachPrim][ 'height'] = lightPrim.GetHeightAttr().Get()
+                self.lights[ eachPrim][ 'texture'] = lightPrim.GetTextureFileAttr().Get()
+            ### AreaLight 
+            if eachPrim.GetTypeName() == 'DiskLight':
+                self.lights[ eachPrim] = {}
+                lightPrim = UsdLux.DiskLight( eachPrim)
+                self.lights[ eachPrim][ 'UsdLux'] = lightPrim
+                self.lights[ eachPrim][ 'radius'] = lightPrim.GetRadiusAttr().Get()
+                 
             # Spotlight
             if eachPrim.GetTypeName() == 'SpotLight':
                 self.lights[ eachPrim ] = {}
+                self.lights[ eachPrim][ 'UsdLux'] = False
             # Domelight            
             if eachPrim.GetTypeName() == 'DomeLight':
                 self.lights[ eachPrim ] = {}
-                if eachPrim.GetAttribute( 'texture:file').IsValid():
-                    if self.debug: print( eachPrim.GetAttribute( 'texture:file').Get())
+                self.lights[ eachPrim][ 'UsdLux'] = lightPrim
+                self.lights[ eachPrim][ 'texture'] = lightPrim.GetTextureFileAttr().Get()
 
     def resolveInstanceToPrim(self, _prim): # hardcoded to ALUSD
         usdPrototype= _prim.GetPrototype() # Animal Logic Alab.usd  should return GEO GEOPROXY Material
@@ -446,7 +462,6 @@ class Reader:
         explicitTxcoordIndices = False  
         usdTxcoords = False
         if not _prim == False: 
-            print(dynTxcoordString)
             if _prim.GetAttribute( 'primvars:' + dynTxcoordString ).IsValid():  # houdini, blender, maya
                 usdTxcoords = _prim.GetAttribute( 'primvars:' + dynTxcoordString ).Get( time = _timeCode )
                 if _prim.GetAttribute( 'primvars:' + dynTxcoordString + ':indices' ).IsValid(): # maya stores explicit indices

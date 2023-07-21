@@ -542,6 +542,9 @@ class SceneAscii:
         # USD's MaterialX and UsdShade functionality are still a work in progress
         # https://openusd.org/release/spec_usdpreviewsurface.html  
         # UsdPreviewSurfaces is a Physically Based Surface and supports a limited set of nodes
+        # The word Preview specifically refers to the performance nature of the shaders in a Hyrda/Storm 
+        # context for rendering 100's of thousands of objects for human animation scrubbing speeds
+        # so not specifically realtime but this means UsdPreviewSurface has no transmission
         # found in most Path tracers and realtime engines.
         # Converting to a Bella's material requires traversing the UsdPreviewSurface shader network 
         # and recreating that network with Bella nodes
@@ -591,68 +594,96 @@ class SceneAscii:
                                                   str( shaderValue[2]) +
                                                   ' 1 )'
                                                 )
+                        if shaderInput == 'roughness': 
+                            self.writeNodeAttrib( _name = 'specular.roughness', _value = str( shaderValue * 100) + 'f' )
 
     def writeLight( self, 
-                    _usd_prim,
-                    _time_code,
-                  ):
-
-        type_name = _usd_prim.GetTypeName()
-        uuid = oomUtil.uuidSanitize( _usd_prim.GetName(), _hashSeed = _usd_prim.GetPath())
-        if _usd_prim.GetParent().GetName() == '/':
-            self.usd_root_nodes.append( uuid)
+                    _lightDict=False,
+                    _timeCode=False,
+                  ): 
+        prim = _lightDict['UsdLux'].GetPrim()
+        usdType = prim.GetTypeName()
+        uuid = oomUtil.uuidSanitize( prim.GetName(), _hashSeed = prim.GetPath())
 
         local_mat4 = False
-        if _usd_prim.GetAttribute( 'xformOp:transform' ).HasValue():
-            usd_matrix4 = _usd_prim.GetAttribute( 'xformOp:transform' ).Get( time = _time_code )
+        localXform = _lightDict['UsdLux'].GetLocalTransformation # TODO switch low level prim query to UsdLux query
+        if prim.GetAttribute( 'xformOp:transform' ).HasValue():
+            usd_matrix4 = prim.GetAttribute( 'xformOp:transform' ).Get( time = _timeCode )
             local_mat4 = np.array( usd_matrix4, dtype='float64')  # convert to numpy for performance
             local_mat4 = local_mat4 * self.stage.mat4_light
 
-        # TODO only pointlight supported
-        if type_name == 'RectLight': node_type = 'areaLight'
-        elif type_name == 'DomeLight': node_type = 'imageDome'
-        elif type_name == 'DistantLight': node_type = 'sun'
-        elif type_name == 'SpotLight': node_type = 'spotLight'
-        else: node_type = 'pointLight'
+        # 
+        if usdType == 'SphereLight':    bellaType = 'pointLight' 
+        elif usdType == 'RectLight':    bellaType = 'areaLight'
+        elif usdType == 'DiskLight':    bellaType = 'areaLight'
+        elif usdType == 'DomeLight':    bellaType = 'imageDome'
+        elif usdType == 'DistantLight': bellaType = 'directionalLight'
+        elif usdType == 'SpotLight':    bellaType = 'spotLight'
+        else: return
 
-        # pull common light attributes
-        if _usd_prim.GetAttribute( 'inputs:color').IsValid():
-            np_color = np.array( _usd_prim.GetAttribute( 'inputs:color').Get( time = _time_code ))
-        elif _usd_prim.GetAttribute( 'color').IsValid():
-            np_color = np.array( _usd_prim.GetAttribute( 'color').Get( time = _time_code))
+        ### UsdLux common attributes
+        l_color = np.array(_lightDict['UsdLux'].GetColorAttr().Get( time = _timeCode))
+        l_intensity = _lightDict['UsdLux'].GetIntensityAttr().Get( time = _timeCode)
+        l_visibility = _lightDict['UsdLux'].GetVisibilityAttr().Get() # needed?
+        l_specular = _lightDict['UsdLux'].GetSpecularAttr().Get( time = _timeCode) # needed?
 
-        if _usd_prim.GetAttribute( 'inputs:intensity').IsValid():
-            intensity = _usd_prim.GetAttribute( 'inputs:intensity').Get( time = _time_code)
-        elif _usd_prim.GetAttribute( 'intensity').IsValid():
-            intensity = _usd_prim.GetAttribute( 'inputs:intensity').Get( time = _time_code)
+        ### Need to insert a intermediate xform to 180 rotate light, easier to do here rather than the generic xform pass
+        ### - [ ] USD is -z, Bella is +z TODO bake this into parent xform, maybe do matrix accumulation before writing out xforms
+        self.writeNode( _type = 'xform', _uuid = uuid)
+        self.writeNodeAttrib( _name = 'name', _value= '"' + uuid + '_flip"')
+        uuid += '_l' # xform gets OG name, light gets _l name
+        flipMat4 = np.array( [[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]], dtype='float64')  
+        self.writeNodeAttrib( _name = 'children[*]', _value = uuid)
+        self.writeNodeAttribNumpy( _name='steps[0].xform',
+                                   _type='mat4',
+                                   _lbracket='(',
+                                   _nparray=flipMat4,
+                                   _rbracket=')',
+                                 )
 
-        self.writeNode( _type = node_type, _uuid = uuid )
+        self.writeNode( _type = bellaType, _uuid = uuid )
         self.writeNodeAttribNumpy( _name = 'color',
                                    _type = 'rgba',
                                    _lbracket = '(',
-                                   _nparray = np_color,
+                                   _nparray = np.array(l_color),
                                    _rbracket = ' 1 )',
                                  )
-        self.writeNodeAttrib( _name = 'intensity',
-                              _value = str( intensity) + 'f',
-                            )
+        self.writeNodeAttrib( _name = 'intensity', _value = str( l_intensity) + 'f',)
+        
+        if bellaType == "pointLight":
+            l_radius = _lightDict['UsdLux'].GetRadiusAttr().Get( time = _timeCode)
+            self.writeNodeAttrib(   _name = 'radius', _value = str( l_radius) +'f')
 
-        # TODO
-        self.writeNodeAttrib( _name = 'multiplier',
-                              _value = '100000f',
-                            )
+        # TODO why am I multiplying by such a large amount? Scene scale
+        if bellaType == "directionalLight":
+            angle = _lightDict['UsdLux'].GetAngleAttr().Get( time = _timeCode )
+        else: ### Why skip distant light?
+            self.writeNodeAttrib(   _name = 'multiplier', _value = '100000f')
 
-        if node_type == 'imageDome':
-            if _usd_prim.GetAttribute( 'texture:file').IsValid():
-                fileDome = Path( str( _usd_prim.GetAttribute( 'texture:file').Get())[ 1:-1])
-                self.writeImageDome( fileDome.suffix, fileDome.parent, fileDome.stem)
-                self.image_dome = uuid
+        if bellaType == 'imageDome':
+            textureFile = _lightDict['UsdLux'].GetTextureFileAttr().Get()
+            fileDome = Path( textureFile)
+            self.writeImageDome( fileDome.suffix, fileDome.parent, fileDome.stem)
+            self.image_dome = uuid
 
-        # TODO
-        if node_type == 'spotLight':
+        ### TODO Blender 3.6 USD only exports spotlight xform, there is no SpotLight prim
+        ### can add a -blenderspotlighthack where xforms with a certain name, or a custom attrib
+        if bellaType == 'spotLight':
             self.writeNodeAttrib( _name = 'aperture', _value = '100f')
             self.writeNodeAttrib( _name = 'penumbra', _value = '4f')
             self.writeNodeAttrib( _name = 'radius', _value = '1.9f')
+        if bellaType == 'areaLight':
+            if usdType == "DiskLight":
+                self.writeNodeAttrib( _name = 'shape', _value = '"disk"')
+                l_size = _lightDict['UsdLux'].GetRadiusAttr().Get() ### TODO erroneously Blender outputs diameter size 2 as  float inputs:radius = 2 
+                self.writeNodeAttrib( _name = 'sizeX', _value = str( l_size) +'f') # DiskLight supports circle only areaLight supports ovals
+                self.writeNodeAttrib( _name = 'sizeY', _value = str( l_size) +'f') 
+            else: ### RectLight is distinct from DiskLight, merged in areaLight
+                textureFile = _lightDict['UsdLux'].GetTextureFileAttr().Get()
+                width = _lightDict['UsdLux'].GetWidthAttr().Get()
+                height = _lightDict['UsdLux'].GetHeightAttr().Get()
+                self.writeNodeAttrib( _name = 'sizeX', _value = str( width) +'f')
+                self.writeNodeAttrib( _name = 'sizeY', _value = str( height) +'f')
 
     def close(self, _usd_scene):
         self.writeSettings()

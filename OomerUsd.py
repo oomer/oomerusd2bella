@@ -37,20 +37,19 @@ import OomerUtil as oomUtil
 class Reader:
     def __init__(   self, 
                     _usdFile = False, 
-                    _debug=False,
-                    _usda=False,
-                    _unittest=False,
+                    _debug = False,
+                    _usda = False,
+                    _unitTest = False,
                 ):
             
         self.file = _usdFile
         self.debug = _debug
-        self.unittest = _unittest
 
-        if not _unittest:
-            self.stage = Usd.Stage.Open( str( _usdFile ) )
+        if not _unitTest:
+            self.stage = Usd.Stage.Open( str( _usdFile))
             if _usda: self.stage.Export( "./"+str( Path( _usdFile).with_suffix( '.usda')))
         else:
-            self.stage = Usd.Stage.CreateInMemory( _usdFile )
+            self.stage = Usd.Stage.CreateInMemory( _usdFile)
 
         self.meshes = {}
         self.lights = {}
@@ -67,24 +66,30 @@ class Reader:
 
         ### GLOBALS
         ###========
-        if self.stage.HasMetadata( 'metersPerUnit' ):
-            self.meters_per_unit = self.stage.GetMetadata( 'metersPerUnit' )
+        self.copyright = False
+        if self.stage.HasMetadata( 'metersPerUnit'):
+            self.meters_per_unit = self.stage.GetMetadata( 'metersPerUnit')
         else:
             self.meters_per_unit = 1
-        if self.stage.HasMetadata( 'upAxis' ):
-            self.up_axis = self.stage.GetMetadata( 'upAxis' )
+        if self.stage.HasMetadata( 'upAxis'):
+            self.up_axis = self.stage.GetMetadata( 'upAxis')
         else:
             self.up_axis = 'Y'
-        if self.stage.HasMetadata( 'timeCodesPerSecond' ):
-            self.timecodes_per_second = self.stage.GetMetadata( 'timeCodesPerSecond' )
+        if self.stage.HasMetadata( 'timeCodesPerSecond'):
+            self.timecodes_per_second = self.stage.GetMetadata( 'timeCodesPerSecond')
         else:
             self.timecodes_per_second = 30
-        if self.stage.HasMetadata( 'startTimeCode' ):
-            self.start_timecode = self.stage.GetMetadata( 'startTimeCode' )
+        if self.stage.HasMetadata( 'startTimeCode'):
+            self.start_timecode = self.stage.GetMetadata( 'startTimeCode')
         else:
             self.start_timecode = 0
-        if self.stage.HasMetadata( 'endTimeCode' ):
-            self.end_timecode = self.stage.GetMetadata( 'endTimeCode' )
+        if self.stage.HasMetadata( 'endTimeCode'):
+            self.end_timecode = self.stage.GetMetadata( 'endTimeCode')
+        if self.stage.HasMetadata( 'customLayerData'):
+            self.customLayerData = self.stage.GetMetadata( 'customLayerData')
+            for customName in self.customLayerData.keys():
+                if customName == 'copyright':
+                    self.copyright = self.customLayerData[ customName]
         else:
             self.end_timecode = 0
 
@@ -99,20 +104,19 @@ class Reader:
             self.cam_unit_scale = 1
 
         self.mat4_identity = np.array( [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]], dtype='float64')
-        ###self.mat4_light = np.array( [[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]], dtype='float64') # TODO should this be Bella module?
         self.xform_cache = UsdGeom.XformCache()
 
-    def GetAttribute( self, attribute ): # UsdAttribute
+    def GetAttribute( self, attribute ): # UNUSED here for future use
         # - [ ] prim attributes can store local values OR have remote inputs values from another prim output
         if attribute.HasAuthoredConnections(): 
-            sdf_path =  attribute.GetConnections()[0] # USD_API bool GetConnections ( SdfPathVector * sources ) const
-            _connection_prim = Usd.Stage.GetPrimAtPath( self.stage, sdf_path.GetPrimPath()) 
-            return _connection_prim.GetAttribute( sdf_path.name).Get() ### USD_API UsdAttribute GetAttribute ( const TfToken & attrName ) const
+            sdfPath =  attribute.GetConnections()[0] # USD_API bool GetConnections ( SdfPathVector * sources ) const
+            connectedPrim = Usd.Stage.GetPrimAtPath( self.stage, sdfPath.GetPrimPath()) 
+            return connectedPrim.GetAttribute( sdfPath.name).Get() ### USD_API UsdAttribute GetAttribute ( const TfToken & attrName ) const
         else:
             return attribute.Get()
 
     # depth first search for prims convertable to bella
-    def traverse_scene( self, filter_by_purpose=False ):
+    def traverseScene( self, filter_by_purpose=False ):
         # - USD notes
         # - UsdStage.traverse() filters out prototypes and possibly other prims
         # - Usd.PrimRange allows custom traversal filter
@@ -123,14 +127,14 @@ class Reader:
         usdPrototypes = self.stage.GetPrototypes() # prototypes contain a common hierarchy referenced by instances
         for eachPrototype in usdPrototypes:
             self.prototype_children = self.prototype_children + list( eachPrototype.GetChildren())
-            listPrototypePrims = listPrototypePrims + list( iter( Usd.PrimRange( eachPrototype )))
+            listPrototypePrims = listPrototypePrims + list( iter( Usd.PrimRange( eachPrototype)))
         listAllPrims = listPrototypePrims + listPrims
         ignorePrim = [] # bypass list for unwanted shaders and textures, ie proxy
-
+        
         # ancestor state tracking
         # TODO better documentation
-        purpose=False
-        ancestorPurpose=False
+        purpose = False
+        ancestorPurpose = False
         materialPrim = False
 
         for eachPrim in listAllPrims:
@@ -140,7 +144,7 @@ class Reader:
             if eachParent:
                 ### this seems Bella specific because of uuid storage, seems ok
                 if eachPrim.GetParent().GetName() == '/': # append to root list if this is a toplevel prim
-                    name = oomUtil.uuidSanitize( eachPrim.GetName(), _hashSeed = eachPrim.GetPath() ) 
+                    name = oomUtil.uuidSanitize( eachPrim.GetName(), _hashSeed = eachPrim.GetPath()) 
                     self.root_prims.append( name)
 
             if eachPrim.HasAttribute( 'purpose'): # USD: render, ...
@@ -164,7 +168,7 @@ class Reader:
                 self.xforms[ eachPrim ]  = {}
                 if eachPrim.IsInstance():
                     # Dictionary map of xform prim to instance prim
-                    self.prototype_instances[eachPrim] =  self.resolveInstanceToPrim(eachPrim)
+                    self.prototype_instances[ eachPrim] =  self.resolveInstanceToPrim( eachPrim)
             if eachPrim.GetTypeName() == 'Mesh' and purpose == 'render':
                 if filter_by_purpose == True and purpose == 'render' or filter_by_purpose == False:
                     self.meshes[ eachPrim ]  = {}
@@ -184,7 +188,6 @@ class Reader:
             # - [ ] Treat UsdPreviewSurface as a equivalent to a Bella PBR material
             if eachPrim.GetTypeName() == 'Material' and eachPrim not in ignorePrim and 'proxy' not in eachPrim.GetName(): # filter out proxy materials
                 self.previewSurfaces[ eachPrim] = {} # [ ] one UsdPreviewSurface becomes 1 bella quickMaterial
-                surfaceOutput = eachPrim.GetAttribute( 'outputs:surface') # TODO change this raw attribute access
                 # A material probably holds a unique surface shader and then instances of UsdUVTextures
                 # to ingest the material, we populate 
 
@@ -193,11 +196,11 @@ class Reader:
                 # to avoid proxy textures
                 # - [ ] document what PrimRange does
                 for shaderNetworkPrim in Usd.PrimRange( eachPrim): ## ( subtree traversal depth first), it this the same as gathering all the nodes of a shader network
-                    usdShader = UsdShade.Shader(shaderNetworkPrim)
+                    usdShader = UsdShade.Shader( shaderNetworkPrim)
                     idAttr = usdShader.GetIdAttr()
                     if idAttr:
                         infoId = idAttr.Get()
-                        usdShader = UsdShade.Shader(shaderNetworkPrim)
+                        usdShader = UsdShade.Shader( shaderNetworkPrim)
 
                         if infoId == 'UsdPreviewSurface':
                             self.previewSurfaces[ eachPrim][ 'shader'] = shaderNetworkPrim # TODO is 'shader' referenced
@@ -228,21 +231,21 @@ class Reader:
                                             #maybe flattewn
 
                                             ### This is how NOT to get an attrib
-                                            ### file = self.GetAttribute( each.GetAttribute( 'inputs:file'))
+                                            ### file = Usd.Prim.GetAttribute( each.GetAttribute( 'inputs:file'))
                                             ### this gets a raw string and is inappropriate because we need
                                             ### sdfAssetPath.resolvedPath because the raw string will either be relative OR absolute
 
-                                            sdfAssetPath = shaderPrim.GetInput('file').Get() ### shader <- input <- sdfAssetPath
+                                            sdfAssetPath = shaderPrim.GetInput( 'file').Get() ### shader <- input <- sdfAssetPath
                                             absFilePath = sdfAssetPath.resolvedPath ### total API confusion, this attrib not documented, got by trying to use GetResolvedPath() and API suggested resolvedPath
                                             relFilePath = sdfAssetPath.path
                                             ### My newbie c++ brain finally figured out that .path and .resolvedPath
                                             ### SDF_API SdfAssetPath ( const std::string & 	path,
                                             ###                        const std::string & 	resolvedPath 
                                             ###                      )	
-                                            if (self.file.parent != Path(absFilePath)): ### Use relative path unless in same dir
-                                                file = Path(absFilePath).relative_to( self.file.parent.resolve() ) ### calculate texture relative to -usdfile path
+                                            if (self.file.parent != Path( absFilePath)): ### Use relative path unless in same dir
+                                                file = Path( absFilePath).relative_to( self.file.parent.resolve()) ### calculate texture relative to -usdfile path
                                             else:
-                                                file = Path(relFilePath)
+                                                file = Path( relFilePath)
                                             sourceColorSpace = usdShader.GetInput( 'sourceColorSpace').Get()
                                             wrapS = shaderPrim.GetInput( 'wrapS').Get()
                                             wrapT = shaderPrim.GetInput( 'wrapT').Get()
@@ -258,16 +261,16 @@ class Reader:
                                         self.previewSurfaces[ eachPrim][ shaderAttributeName] = attribValue
 
             if eachPrim.GetTypeName() == 'Camera':
-                self.cameras[ eachPrim ]  = {}
+                self.cameras[ eachPrim]  = {}
 
             if eachPrim.GetTypeName() == 'SphereLight':
-                self.lights[ eachPrim ] = {}
+                self.lights[ eachPrim] = {}
                 lightPrim = UsdLux.SphereLight( eachPrim)
                 self.lights[ eachPrim][ 'UsdLux'] = lightPrim
 
             ### DistantLight
             if eachPrim.GetTypeName() == 'DistantLight':
-                self.lights[ eachPrim ] = {}
+                self.lights[ eachPrim] = {}
                 lightPrim = UsdLux.DistantLight( eachPrim)
                 self.lights[ eachPrim][ 'UsdLux'] = lightPrim
                 self.lights[ eachPrim][ 'angle']  = lightPrim.GetAngleAttr().Get()
@@ -296,7 +299,7 @@ class Reader:
                 self.lights[ eachPrim][ 'UsdLux'] = lightPrim
                 self.lights[ eachPrim][ 'texture'] = lightPrim.GetTextureFileAttr().Get()
 
-    def resolveInstanceToPrim(self, _prim): # hardcoded to ALUSD
+    def resolveInstanceToPrim( self, _prim): # hardcoded to ALUSD
         usdPrototype= _prim.GetPrototype() # Animal Logic Alab.usd  should return GEO GEOPROXY Material
         for eachChildPrim in usdPrototype.GetChildren():
             if eachChildPrim.HasAttribute( 'purpose'):
@@ -330,7 +333,7 @@ class Reader:
         newVertCount = 0
         newVertexCounts = []    ### int[] faceVertexCount
         newVertexIndices = []   ### int[] faceVertexIndices
-        newTxcoordIndices = []   ### int[] faceVertexIndices
+        newTxcoordIndices = []  ### int[] faceVertexIndices
         newNormalIndices = []   ### int[] faceVertexIndices
         ngonVertexLimit = 5
 
@@ -343,7 +346,7 @@ class Reader:
         # point data is XYZ location
 
         for face in range(0,len( _faceVertexCounts)):
-            numVertsPerFace = _faceVertexCounts[ face ] 
+            numVertsPerFace = _faceVertexCounts[ face] 
             if numVertsPerFace < ngonVertexLimit: # default triangle and quad processing
                 newVertexCounts.append( numVertsPerFace)
                 newVertexIndices += list( npFaceVertexIndices[ ogVertCount :ogVertCount + int ( numVertsPerFace)])
@@ -365,16 +368,16 @@ class Reader:
                     # append new triangles
                     newVertexCounts.append( 3 )
                     newVertexIndices.append( int( npFaceVertexIndices[ ogVertCount + 0 ] ))
-                    newVertexIndices.append( int( npFaceVertexIndices[ ogVertCount + ngonVertexOffset + 1 ] ))
-                    newVertexIndices.append( int( npFaceVertexIndices[ ogVertCount + ngonVertexOffset + 2 ] ))
+                    newVertexIndices.append( int( npFaceVertexIndices[ ogVertCount + ngonVertexOffset + 1]))
+                    newVertexIndices.append( int( npFaceVertexIndices[ ogVertCount + ngonVertexOffset + 2]))
                     if _txcoordIndices:
-                        newTxcoordIndices.append( int( npTxcoordIndices[ ogVertCount + 0 ] ))
-                        newTxcoordIndices.append( int( npTxcoordIndices[ ogVertCount + ngonVertexOffset + 1 ] ))
-                        newTxcoordIndices.append( int( npTxcoordIndices[ ogVertCount + ngonVertexOffset + 2 ] ))
+                        newTxcoordIndices.append( int( npTxcoordIndices[ ogVertCount + 0]))
+                        newTxcoordIndices.append( int( npTxcoordIndices[ ogVertCount + ngonVertexOffset + 1]))
+                        newTxcoordIndices.append( int( npTxcoordIndices[ ogVertCount + ngonVertexOffset + 2]))
                     if _normalIndices:
-                        newNormalIndices.append( int( npNormalIndices[ ogVertCount + 0 ] ))
-                        newNormalIndices.append( int( npNormalIndices[ ogVertCount + ngonVertexOffset + 1 ] ))
-                        newNormalIndices.append( int( npNormalIndices[ ogVertCount + ngonVertexOffset + 2 ] ))
+                        newNormalIndices.append( int( npNormalIndices[ ogVertCount + 0]))
+                        newNormalIndices.append( int( npNormalIndices[ ogVertCount + ngonVertexOffset + 1]))
+                        newNormalIndices.append( int( npNormalIndices[ ogVertCount + ngonVertexOffset + 2]))
                     ngonVertexOffset += 1
                     newVertCount += 3
                 ogVertCount += numVertsPerFace
@@ -385,7 +388,6 @@ class Reader:
             return newVertexCounts, newVertexIndices, newTxcoordIndices
         else:
             return newVertexCounts, newVertexIndices
-
 
     ##
     def getMesh( self, 
@@ -403,9 +405,10 @@ class Reader:
         # This code avoids using Python loops and instead uses numpy methods to mold the data into a Bella
         # friendly format ( vectorized processing)
         # by putting data into numpy arrays, indexing and processing will be simplified
-
-        if not _prim == False:
-            faceVertexCounts = _prim.GetAttribute( 'faceVertexCounts' ).Get( time = _timeCode )
+        if _prim: usdGeom = UsdGeom.Mesh( _prim)
+        if _prim:
+            ### faceVertexCounts = _prim.GetAttribute( 'faceVertexCounts' ).Get( time = _timeCode )
+            faceVertexCounts = usdGeom.GetFaceVertexCountsAttr().Get( time = _timeCode)
         else: ## unittest
             faceVertexCounts = _faceVertexCounts
 
@@ -413,9 +416,9 @@ class Reader:
             if self.debug: print( 'FAIL:', _prim, 'zero faces')
             return False, False, False, False, False, False
 
-        if not _prim == False:
-            usdPoints = _prim.GetAttribute( 'points' ).Get( time = _timeCode ) # array of points and their positions
-            faceVertexIndices = _prim.GetAttribute( 'faceVertexIndices' ).Get( time = _timeCode )
+        if _prim:
+            usdPoints = _prim.GetAttribute( 'points').Get( time = _timeCode) # array of points and their positions
+            faceVertexIndices = usdGeom.GetFaceVertexIndicesAttr().Get( time = _timeCode)
         else: ## unittest
             usdPoints = _usdPoints
             faceVertexIndices = _faceVertexIndices
@@ -427,36 +430,37 @@ class Reader:
         # [ 2024 ] found Scales_baby.usda output with multiple UV texcoords2f primvars:body primvars:head
         # [ 2024 ] Blender USD export supports one texture, multiple UV channels ( useful to increase texel density as needed)
         #           Required a mix node for image texture and 2 uvmap nodes
-        dynTxcoordString = 'st' ### fallback 
-        if _prim.HasRelationship( 'material:binding'): 
-            materialRelationship = _prim.GetRelationship( 'material:binding')
-            materialSdfPath = materialRelationship.GetTargets()[0]
-            materialPrim = self.stage.GetPrimAtPath( materialSdfPath)
-            for materialShaderPrims in Usd.PrimRange( materialPrim): ## local traversal
-                infoId = materialShaderPrims.GetAttribute( 'info:id').Get()
-                if infoId == 'UsdPrimvarReader_float2':
-                    usdShadeInput = UsdShade.Shader( materialShaderPrims).GetInput( 'varname') ## resolve to input name
-                    ### Get sdfPath to another prim where value is stored
-                    ### - [ ] Could this be connected to another node, do I need a reursive loop?
-                    connect2 = usdShadeInput.GetAttr().GetConnections()
-                    ### Returns list of input connections
-                    if len(connect2) == 1: # input
-                        sdfPath2 = usdShadeInput.GetAttr().GetConnections()[0] # assuming single connection world 
-                        matPrim2 = self.stage.GetPrimAtPath(sdfPath2.GetPrimPath()) ### Get UsdPrima that at end of this connection
-                        dynTxcoordString = matPrim2.GetAttribute(sdfPath2.name).Get() ### UsdPrim.GetAttribute(  ) 
-                    else: # local value stored on input
-                        dynTxcoordString = usdShadeInput.Get()
+        if _prim:
+            dynTxcoordString = 'st' ### fallback 
+            if _prim.HasRelationship( 'material:binding'): ### Is there a material bound to this prim?
+                materialRelationship = _prim.GetRelationship( 'material:binding')
+                materialSdfPath = materialRelationship.GetTargets()[0]
+                materialPrim = self.stage.GetPrimAtPath( materialSdfPath)
+                for materialShaderPrims in Usd.PrimRange( materialPrim): ## local traversal
+                    infoId = UsdShade.Shader(materialShaderPrims).GetIdAttr().Get()
+                    if infoId == 'UsdPrimvarReader_float2':
+                        usdShadeInput = UsdShade.Shader( materialShaderPrims).GetInput( 'varname') ## resolve to input name
+                        ### Get sdfPath to another prim where value is stored
+                        ### - [ ] Could this be connected to another node, do I need a reursive loop?
+                        connect2 = usdShadeInput.GetAttr().GetConnections()
+                        ### Returns list of input connections
+                        if len(connect2) == 1: # input
+                            sdfPath2 = usdShadeInput.GetAttr().GetConnections()[0] # assuming single connection world 
+                            matPrim2 = self.stage.GetPrimAtPath(sdfPath2.GetPrimPath()) ### Get UsdPrima that at end of this connection
+                            dynTxcoordString = matPrim2.GetAttribute(sdfPath2.name).Get() ### UsdPrim.GetAttribute(  ) 
+                        else: # local value stored on input
+                            dynTxcoordString = usdShadeInput.Get()
 
-        ### - [x] finally realized that the texcoord primvar string is stored in UsdShade graph
+        ### Look for txccords with explicit indices
         explicitTxcoordIndices = False  
         usdTxcoords = False
-        if not _prim == False: 
-            if _prim.GetAttribute( 'primvars:' + dynTxcoordString ).IsValid():  # houdini, blender, maya
-                usdTxcoords = _prim.GetAttribute( 'primvars:' + dynTxcoordString ).Get( time = _timeCode )
-                if _prim.GetAttribute( 'primvars:' + dynTxcoordString + ':indices' ).IsValid(): # maya stores explicit indices
+        if _prim: 
+            if _prim.GetAttribute( 'primvars:' + dynTxcoordString).IsValid():  # houdini, blender, maya
+                usdTxcoords = _prim.GetAttribute( 'primvars:' + dynTxcoordString).Get( time = _timeCode)
+                if _prim.GetAttribute( 'primvars:' + dynTxcoordString + ':indices').IsValid(): # maya stores explicit indices
                     # Maya writes usd with explicit texcoord indices while Blender and Houdini use implicit texcoords indexing
                     # - [ ] document implicit versus explicit
-                    explicitTxcoordIndices = _prim.GetAttribute( 'primvars:' + dynTxcoordString + ':indices' ).Get()
+                    explicitTxcoordIndices = _prim.GetAttribute( 'primvars:' + dynTxcoordString + ':indices').Get()
         else: ## unittest
             usdTxcoords = _usdTxcoords
  
@@ -464,15 +468,17 @@ class Reader:
         ###======== tv_retro.usda = normals t51-helmet.usda = primvars:normals : - [ ] why two string tokens?
         explicitNormalIndices = False
         usdNormals = False
-        if not _prim == False:
-            if _prim.GetAttribute( 'primvars:normals' ).IsValid(): # TODO Shouldn't access raw attrib, need pxr wrapper: same reason why texcoords was switched, may not apply in this case
-                usdNormals = _prim.GetAttribute( 'primvars:normals' ).Get( time = _timeCode )
-                if _prim.GetAttribute( 'primvars:normals:indices' ).IsValid(): 
-                    explicitNormalIndices = _prim.GetAttribute( 'primvars:normals:indices' ).Get()
-            elif _prim.GetAttribute( 'normals' ).IsValid(): # TODO Shouldn't access raw attrib, need pxr wrapper
-                usdNormals = _prim.GetAttribute( 'normals' ).Get( time = _timeCode )
-                if _prim.GetAttribute( 'normals:indices' ).IsValid(): 
-                    explicitNormalIndices = _prim.GetAttribute( 'normals:indices' ).Get()
+        if _prim:
+            if _prim.GetAttribute( 'primvars:normals').IsValid(): # TODO Shouldn't access raw attrib, need pxr wrapper: same reason why texcoords was switched, may not apply in this case
+                usdNormals = _prim.GetAttribute( 'primvars:normals').Get( time = _timeCode)
+                if _prim.GetAttribute( 'primvars:normals:indices').IsValid(): 
+                    explicitNormalIndices = _prim.GetAttribute( 'primvars:normals:indices').Get()
+            elif _prim.GetAttribute( 'normals').IsValid(): # TODO Shouldn't access raw attrib, need pxr wrapper
+                #print( len(_prim.GetAttribute( 'normals').Get( time = _timeCode )))
+                #usdNormals = _prim.GetAttribute( 'normals').Get( time = _timeCode )
+                usdNormals = UsdGeom.Mesh( _prim).GetNormalsAttr().Get()
+                if _prim.GetAttribute( 'normals:indices').IsValid(): 
+                    explicitNormalIndices = _prim.GetAttribute( 'normals:indices').Get()
             else:
                 usdNormals = _usdNormals
         else:
@@ -482,20 +488,20 @@ class Reader:
         ###======
         # - [x] triangulate ngons by restructuring counts and indices
         npFaceVertexCounts = np.array( faceVertexCounts, dtype=np.int32)  ## need numpy array here to test for ngons
-        if npFaceVertexCounts[ npFaceVertexCounts > 4 ].size > 0:
+        if npFaceVertexCounts[ npFaceVertexCounts > 4].size > 0:
             if explicitTxcoordIndices: ### example tv_retro.usdz
                 if explicitNormalIndices:
                     faceVertexCounts, faceVertexIndices, explicitTxcoordIndices, explicitNormalIndices \
-                    = self.triangulate_ngons(   faceVertexCounts, 
-                                                faceVertexIndices, 
-                                                explicitTxcoordIndices, 
-                                                explicitNormalIndices
+                    = self.triangulate_ngons( faceVertexCounts, 
+                                              faceVertexIndices, 
+                                              explicitTxcoordIndices, 
+                                              explicitNormalIndices,
                                             )
                 else:
-                    faceVertexCounts, faceVertexIndices, explicitTxcoordIndices  \
-                    = self.triangulate_ngons(   faceVertexCounts, 
-                                                faceVertexIndices, 
-                                                explicitTxcoordIndices, 
+                    faceVertexCounts, faceVertexIndices, explicitTxcoordIndices \
+                    = self.triangulate_ngons( faceVertexCounts, 
+                                              faceVertexIndices, 
+                                              explicitTxcoordIndices, 
                                             )
             else:
                 faceVertexCounts, faceVertexIndices = self.triangulate_ngons( faceVertexCounts, faceVertexIndices)
@@ -526,7 +532,7 @@ class Reader:
 
         # create ndarray of simple unshared verts, each face gets a new 1,2,3,[4] incremented range
         # convert to a single column 2d array
-        b1 = npCumulativeIndex.reshape( (numFaces,1) )
+        b1 = npCumulativeIndex.reshape( (numFaces,1))
         # repeat single column 3 more times to create a numFaces x 4 array
         npCumulativeIndex2 = np.repeat(b1,4,axis=1)
 
@@ -535,28 +541,26 @@ class Reader:
         npCumulativeIndex2[ :,3] += 2
 
         # repeat previous index if triangle
-        l = npCumulativeIndex2[ :,3 ]  
-        m = np.where( npFaceVertexCounts==4, l+1 , l)
+        l = npCumulativeIndex2[ :,3]  
+        m = np.where( npFaceVertexCounts == 4, l+1 , l)
         npCumulativeIndex2[ :,3] = m
 
-        ### npFaceVertexIndices is still uses Usd vertex indexing, sequentialy list tris and quads and delimited by npfaceVertexCount
-        ### npIndicesInC4dStyle 
-        ### 
+        ### npFaceVertexIndices sequentialy lists tris and quads, delimited by npfaceVertexCount ( triangulated and split)
+        ### npIndicesInC4dStyle lists tris [a,b,c,c] and quads [a,b,c,d]
         npIndicesInC4DStyle = npCumulativeIndex2.ravel()
 
-
-        # since npFaceVertexIndices repeats itself when you have shared verts we automatically duplicate values 
-        # thus shared verts -> unshared verts in one step
-        npPoints = npPoints[ ( npFaceVertexIndices )]
+        ### since npFaceVertexIndices repeats itself when you have shared verts we automatically duplicate values 
+        ### thus shared verts -> unshared verts in one step
+        npPoints = npPoints[ ( npFaceVertexIndices)]
 
         if usdTxcoords: 
             if explicitTxcoordIndices: # Maya tends to export explicitly indexed vertex buffers
-                npTxcoords = np.array( usdTxcoords, dtype='float64')[ ( npExplicitTxcoordIndices) ] # nparray reindexed using explicit indices
+                npTxcoords = np.array( usdTxcoords, dtype='float64')[ ( npExplicitTxcoordIndices)] # nparray reindexed using explicit indices
             elif len(usdTxcoords) == len(npFaceVertexIndices): ##  if vertices were split these won't match
                 npTxcoords = np.array( usdTxcoords, dtype='float64') ## pass through 
-            else: ### Magic sauce useing numpy to split vertices in a single vectorized operation
-                ### - [ ] document the magic sauce
-                npTxcoords = np.array( usdTxcoords, dtype='float64')[ ( npFaceVertexIndices ) ]
+            else: ### Magic sauce using numpy to split vertices in a single vectorized operation
+                ### - [ ] TODO document the magic sauce
+                npTxcoords = np.array( usdTxcoords, dtype='float64')[ ( npFaceVertexIndices)]
         else: # no txcoords
             npTxcoords = False
 
@@ -572,8 +576,8 @@ class Reader:
             else: ### Magic sauce using numpy to split vertices in a single vectorized operation
                 ### - [ ] document the magic sauce
                 npNormals = np.array( usdNormals, dtype='float64')[ ( npFaceVertexIndices)]  # - [ ] split verts if needed magic sauce
-        else: ### - no normals at all
-            npNormals = np.zeros( [0,3], dtype='float64' )
+        else: ### - no normals at all TODO maybe switch to bool
+            npNormals = np.zeros( [0,3], dtype='float64')
 
         return  npFaceVertexCounts, \
                 npIndicesInC4DStyle, \

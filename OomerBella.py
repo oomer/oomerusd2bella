@@ -27,6 +27,7 @@ SOFTWARE.
 ## third party modules
 import numpy as np
 from pxr import Usd, Gf, UsdGeom, UsdShade, UsdLux 
+import re, json
 
 ## standard modules
 from pathlib import Path  # used for cross platform file paths
@@ -56,6 +57,8 @@ class SceneAscii:
         self.writeState()
         self.writeBeautyPass()
         self.writeGroundPlane()
+        if _usdScene.copyright: 
+            self.writeString( 'copyright', json.dumps ( _usdScene.copyright))
         self.camera = ''
         u = self.stage.meters_per_unit  
         if self.stage.up_axis == self.renderer_up_axis: # up axis matches Bella
@@ -68,7 +71,7 @@ class SceneAscii:
                                   [ 0, 0, u, 0],
                                   [ 0, -u, 0, 0],
                                   [ 0, 0, 0, 1]]
-        self.np_basis_change_mat4 = np.array( _basis_change_mat4 )
+        self.np_basis_change_mat4 = np.array( _basis_change_mat4)
 
         oomerUtility = oomUtil.Mappings()
         self.usdPreviewSurface = oomerUtility.usdPreviewSurface
@@ -94,6 +97,10 @@ class SceneAscii:
     def writeGroundPlane( self, _elevation=0):
         self.file.write('groundPlane groundPlane:\n')
         self.file.write(self.nice('elevation') + str( _elevation) + 'f;\n')
+    def writeString( self, _name = False, _string = False):
+        self.file.write('string  notes:\n')
+        self.file.write(self.nice('name') + '"' + _name + '";\n')
+        self.file.write(self.nice('value') + _string + ';\n')
     ##
     def writeBeautyPass( self):
         self.file.write('beautyPass beautyPass;\n')
@@ -102,14 +109,14 @@ class SceneAscii:
         self.file.write('skyDome skyDome;\n')
     ##
     def writeBox( self, _sizeX = 1, _sizeY = 1, _sizeZ = 1, _radius = 0):
-        self.file.write('box box:\n')
-        self.file.write(self.nice('radius') + str( _radius) + 'f;\n')
-        self.file.write(self.nice('sizeX') + str( _sizeX) + 'f;\n')
-        self.file.write(self.nice('sizeY') + str( _sizeY) + 'f;\n')
-        self.file.write(self.nice('sizeZ') + str( _sizeZ) + 'f;\n')
+        self.file.write( 'box box:\n')
+        self.file.write(self.nice( 'radius') + str( _radius) + 'f;\n')
+        self.file.write(self.nice( 'sizeX') + str( _sizeX) + 'f;\n')
+        self.file.write(self.nice( 'sizeY') + str( _sizeY) + 'f;\n')
+        self.file.write(self.nice( 'sizeZ') + str( _sizeZ) + 'f;\n')
     ##
     def writeColor( self, _rgba=( 1, 1, 1, 1), _variation=0):
-        self.file.write('color color:\n')
+        self.file.write( 'color color:\n')
         self.file.write( self.nice( 'color') + 
                                     'rgba(' + 
                                     str( _rgba[0]) + ' ' + 
@@ -117,7 +124,7 @@ class SceneAscii:
                                     str( _rgba[2]) + ' ' + 
                                     str( _rgba[3]) + ');\n'
                        )
-        self.file.write(self.nice('variation') + str( _variation) + 'f;\n')
+        self.file.write(self.nice( 'variation') + str( _variation) + 'f;\n')
 
     ##
     def writeNodeAttrib( self, _name = False, _connected = False, _value = False):
@@ -128,7 +135,7 @@ class SceneAscii:
 
 
     def writeFloat( self, _name = False, _value= 1.0):
-        self.file.write(self.nice(_name) + str( _value) + 'f;\n')
+        self.file.write( self.nice( _name) + str( _value) + 'f;\n')
 
     def writeNode( self, _type = False, _uuid = False):
         self.file.write( _type + ' ' + _uuid + ':\n')
@@ -142,10 +149,10 @@ class SceneAscii:
                             ):
         #https://stackoverflow.com/questions/53820891/speed-of-writing-a-numpy-array-to-a-text-file
         #Assumed numpy.savetxt was performant, it is not! Saving 0020_060 Sprite fright went from 4 minutes to 1 minute
-        self.file.write(self.nice(_name) + _type)
+        self.file.write( self.nice( _name) + _type)
         self.file.write( _lbracket)
         npArray = _nparray.ravel() # - [ ] doc
-        npFormat = ' '.join(['%g'] * npArray.size) #- [ ] document npFormat
+        npFormat = ' '.join([ '%g'] * npArray.size) #- [ ] document npFormat
         npFormat = '\n'.join([ npFormat])
         data = npFormat % tuple( npArray )
         self.file.write( data)
@@ -153,7 +160,7 @@ class SceneAscii:
         self.file.write( ';\n')
 
     def writeCamera( self, _usd_prim, _time_code):
-        uuid = oomUtil.uuidSanitize( _usd_prim.GetName(), _hashSeed = _usd_prim.GetPath() )
+        uuid = oomUtil.uuidSanitize( _usd_prim.GetName(), _hashSeed = _usd_prim.GetPath())
         self.camera = uuid
 
         if _usd_prim.GetAttribute( 'horizontalAperture').HasValue():
@@ -178,7 +185,7 @@ class SceneAscii:
             projection = 'PERSPECTIVE'
 
         if _usd_prim.GetAttribute( 'focalLength').HasValue():
-            focal_length = _usd_prim.GetAttribute( 'focalLength').Get(time = _time_code)
+            focal_length = _usd_prim.GetAttribute( 'focalLength').Get( time = _time_code)
         else:
             focal_length = 50
 
@@ -214,7 +221,7 @@ class SceneAscii:
         #_lens_type = TYPE_THIN_LENS
 
         # Bella camera node
-        self.writeNode( _type = 'camera', _uuid = uuid )
+        self.writeNode( _type = 'camera', _uuid = uuid)
         self.writeNodeAttrib( _name = 'lens', _value = uuid + '_thinLens')
         self.writeNodeAttrib( _name = 'resolution',
                               _value = 'vec2( ' + str( xRes ) + ' ' + str( yRes ) + ' )',
@@ -250,7 +257,7 @@ class SceneAscii:
             _diaphragmType = 'circular'
         self.writeNode( _type = 'thinLens', _uuid = _uuid + '_thinLens')
         self.writeNodeAttrib( _name = 'steps[0].fStop', _value = str(_fStop) + 'f')
-        self.writeNodeAttrib( _name = 'steps[0].focalLen', _value=str( _focalLength * self.stage.cam_unit_scale) + 'f')
+        self.writeNodeAttrib( _name = 'steps[0].focalLen', _value = str( _focalLength * self.stage.cam_unit_scale) + 'f')
         self.writeNodeAttrib( _name = 'steps[0].focusDist', _value = str( _focusDistance * self.stage.cam_unit_scale) + 'f')
         self.writeNodeAttrib( _name = 'aperture.blades', _value = str( _nBlades) + 'u')
         self.writeNodeAttrib( _name = 'aperture.rotation', _value = str( _angle) + 'f')
@@ -268,8 +275,7 @@ class SceneAscii:
                             )
 
         self.stage.xform_cache.SetTime( _time_code) #if cache time is unset it uses DEFAULT which is always going to be wrong
-        np_matrix4 = np.array( self.stage.xform_cache.GetLocalToWorldTransform( _usd_prim),
-                              dtype='float64')  # get CTM for camera
+        np_matrix4 = np.array( self.stage.xform_cache.GetLocalToWorldTransform( _usd_prim), dtype='float64')  # get CTM for camera
 
         np_bella = np_matrix4 @ self.np_basis_change_mat4  # transform camera CTM in DCC coordsys to bella coordsys
         np_bella[1] *= -1  # Flip Bella y axis
@@ -323,14 +329,14 @@ class SceneAscii:
         uuid += '_m' # xform gets OG name, mesh gets _mesh name
         np_matrix4_1d = np_matrix4.ravel()  # reshape [[a1, b1, c1, d1],[a2, b2, c2, d2]] to [(a1 b1 c1 d1 a2 b2 c2 d2)] for np.savetxt
         self.writeNodeAttrib( _name = 'children[*]', _value = uuid)
-        self.writeNodeAttribNumpy( _name='steps[0].xform',
-                                   _type='mat4',
-                                   _lbracket='(',
-                                   _nparray=np_matrix4_1d,
-                                   _rbracket=')',
+        self.writeNodeAttribNumpy( _name = 'steps[0].xform',
+                                   _type = 'mat4',
+                                   _lbracket = '(',
+                                   _nparray = np_matrix4_1d,
+                                   _rbracket = ')',
                                  )
         self.writeNodeAttrib( _name = 'material',       
-                              _value=material_name,
+                              _value = material_name,
                             )
 
         self.writeNode( _type = 'mesh', _uuid = uuid)
@@ -347,7 +353,6 @@ class SceneAscii:
                                  )
 
         self.writeNodeAttribNumpy( _name = 'steps[0].normals',
-                                   #_type = 'vec3f[' + str( len( _npNormals)) + ']',
                                    _type = 'vec3f[' + str( _npNormals.size) + ']',
                                    _nparray = _npNormals,
                                  )
@@ -363,7 +368,7 @@ class SceneAscii:
 
         if subdivision > 0:
             self.writeNodeAttrib(  _name = 'subdivision.level',       
-                                   _value=str( subdivision)+'u',
+                                   _value = str( subdivision)+'u',
                                 )
 
         ### Bella flag to skip mesh optimization 
@@ -386,7 +391,7 @@ class SceneAscii:
         if _prim in _usdScene.prototype_children: # Spelunk and try to find useful name  
             alusd_name = _prim.GetAttribute( 'alusd_originalName').Get() # [ ] GetName() gives us a useless "GEO" name, original name much more relevant
             if isinstance( alusd_name, str): prim_name = alusd_name  
-        name = oomUtil.uuidSanitize( primName, _hashSeed = _prim.GetPath() ) 
+        name = oomUtil.uuidSanitize( primName, _hashSeed = _prim.GetPath()) 
 
         self.stage.xform_cache.SetTime( _timeCode)  ### Set xform cache to animation time
         np_matrix4 = np.array( self.stage.xform_cache.GetLocalTransformation( _prim)[0]) #flatten transforms to mat4
@@ -436,23 +441,23 @@ class SceneAscii:
                                  )
 
     def writeSettings( self ):
-        self.writeNode( _type = 'settings', _uuid = 'settings' )
-        self.writeNodeAttrib( _name = 'beautyPass', _value = 'beautyPass' )
+        self.writeNode( _type = 'settings', _uuid = 'settings')
+        self.writeNodeAttrib( _name = 'beautyPass', _value = 'beautyPass')
 
         if self.camera: 
-            self.writeNodeAttrib( _name ='camera', _value =self.camera ) # - why use self.camera
+            self.writeNodeAttrib( _name = 'camera', _value = self.camera) # - why use self.camera
         if self.colorDome:
-            self.writeNodeAttrib( _name = 'environment', _value = "colorDome" )
-        self.writeNodeAttrib( _name = 'iprScale', _value = '100f' )
-        self.writeNodeAttrib( _name = 'threads', _value = '-1' )
-        self.writeNodeAttrib( _name = 'useGpu', _value = 'true' )
-        self.writeNodeAttrib( _name = 'iprNavigation', _value='"maya"' )
+            self.writeNodeAttrib( _name = 'environment', _value = "colorDome")
+        self.writeNodeAttrib( _name = 'iprScale', _value = '100f')
+        self.writeNodeAttrib( _name = 'threads', _value = '-1')
+        self.writeNodeAttrib( _name = 'useGpu', _value = 'true')
+        self.writeNodeAttrib( _name = 'iprNavigation', _value='"maya"')
         if self.colorDome: self.writeColorDome()
     
     def writeColorDome( self ):
-        self.writeNode( _type = 'colorDome', _uuid = 'colorDome' )
+        self.writeNode( _type = 'colorDome', _uuid = 'colorDome')
 
-    def writeImageDome( self, extension, directory, file ):
+    def writeImageDome( self, extension, directory, file):
         # Bella imageDome node
         self.writeNodeAttrib( _name = 'ext',
                               _value = '"'+extension[1:]+'"',
@@ -474,28 +479,28 @@ class SceneAscii:
         camera_name         = 'oomerCamera'
         self.camera = camera_name
         self.world_nodes.append(camera_name+'_xform')
-        self.file.write( 'xform '+camera_name+'_xform:\n' )
-        self.file.write('  .name                    = "' + camera_name + '_xform";\n' )
-        self.file.write('  .children[*]             = ' + camera_name + ';\n' )
+        self.file.write( 'xform '+camera_name+'_xform:\n')
+        self.file.write('  .name                    = "' + camera_name + '_xform";\n')
+        self.file.write('  .children[*]             = ' + camera_name + ';\n')
         self.file.write('  .steps[0].xform          = mat4(1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1);\n')
 
-        self.file.write('camera ' + camera_name + ':\n' )
-        self.file.write('  .lens                    = ' + camera_name+'_thinLens;\n' )
-        self.file.write('  .resolution              = vec2(1920 1080);\n' )
-        self.file.write('  .sensor                  = ' + camera_name + '_sensor;\n' )
+        self.file.write('camera ' + camera_name + ':\n')
+        self.file.write('  .lens                    = ' + camera_name+'_thinLens;\n')
+        self.file.write('  .resolution              = vec2(1920 1080);\n')
+        self.file.write('  .sensor                  = ' + camera_name + '_sensor;\n')
 
         self.file.write('sensor '+camera_name+'_sensor:\n')
-        self.file.write('  .size                    = vec2(' + str( horizontal_aperture ) + ' ' + str ( vertical_aperture ) + ');\n' )
+        self.file.write('  .size                    = vec2(' + str( horizontal_aperture ) + ' ' + str ( vertical_aperture ) + ');\n')
 
-        self.file.write( 'thinLens ' + camera_name + '_thinLens:\n' )
-        self.file.write( '  .steps[0].fStop          = ' + str( fstop )+'f;\n' )
-        self.file.write( '  .steps[0].focalLen       = ' + str( focal_length )+'f;\n' )
-        self.file.write( '  .steps[0].focusDist      = ' + str( focus_distance )+'f;\n' )
+        self.file.write( 'thinLens ' + camera_name + '_thinLens:\n')
+        self.file.write( '  .steps[0].fStop          = ' + str( fstop )+'f;\n')
+        self.file.write( '  .steps[0].focalLen       = ' + str( focal_length )+'f;\n')
+        self.file.write( '  .steps[0].focusDist      = ' + str( focus_distance )+'f;\n')
 
     def writeUsdRoot(self, _usdScene):
         uuid = oomUtil.uuidSanitize( self.stage.file.stem) + '_usd'
         self.writeNode( _type = 'xform', _uuid = uuid)
-        self.world_nodes.append( uuid )
+        self.world_nodes.append( uuid)
         for node_uuid in _usdScene.root_prims:
             self.writeNodeAttrib( _name = 'children[*]', _value = node_uuid)
         self.writeNodeAttribNumpy( _name = 'steps[0].xform',
@@ -522,9 +527,9 @@ class SceneAscii:
                         ):
         uuid = oomUtil.uuidSanitize( _usdShader.GetPrim().GetName(), _hashSeed = _usdShader.GetPath())
         self.writeNode( _type='fileTexture', _uuid = uuid)
-        self.file.write( self.nice('dir')  + '"' + str( _filePath.parent)+'";\n' )
-        self.file.write( self.nice('ext')  + '"' + str( _filePath.suffix) +'";\n' )
-        self.file.write( self.nice('file') + '"' + str( _filePath.stem) +'";\n' )
+        self.file.write( self.nice('dir')  + '"' + str( _filePath.parent)+'";\n')
+        self.file.write( self.nice('ext')  + '"' + str( _filePath.suffix) +'";\n')
+        self.file.write( self.nice('file') + '"' + str( _filePath.stem) +'";\n')
 
     def writeNormalTexture( self,
                             _prim,
@@ -630,7 +635,7 @@ class SceneAscii:
         local_mat4 = False
         localXform = _lightDict['UsdLux'].GetLocalTransformation # TODO switch low level prim query to UsdLux query
         if prim.GetAttribute( 'xformOp:transform' ).HasValue():
-            usd_matrix4 = prim.GetAttribute( 'xformOp:transform' ).Get( time = _timeCode )
+            usd_matrix4 = prim.GetAttribute( 'xformOp:transform' ).Get( time = _timeCode)
             local_mat4 = np.array( usd_matrix4, dtype='float64')  # convert to numpy for performance
             local_mat4 = local_mat4 * self.stage.mat4_light
 
@@ -644,10 +649,10 @@ class SceneAscii:
         else: return
 
         ### UsdLux common attributes
-        l_color = np.array(_lightDict['UsdLux'].GetColorAttr().Get( time = _timeCode))
-        l_intensity = _lightDict['UsdLux'].GetIntensityAttr().Get( time = _timeCode)
-        l_visibility = _lightDict['UsdLux'].GetVisibilityAttr().Get() # needed?
-        l_specular = _lightDict['UsdLux'].GetSpecularAttr().Get( time = _timeCode) # needed?
+        l_color = np.array( _lightDict[ 'UsdLux'].GetColorAttr().Get( time = _timeCode))
+        l_intensity = _lightDict[ 'UsdLux'].GetIntensityAttr().Get( time = _timeCode)
+        l_visibility = _lightDict[ 'UsdLux'].GetVisibilityAttr().Get() # needed?
+        l_specular = _lightDict[ 'UsdLux'].GetSpecularAttr().Get( time = _timeCode) # needed?
 
         ### Need to insert a intermediate xform to 180 rotate light, easier to do here rather than the generic xform pass
         ### - [ ] USD is -z, Bella is +z TODO bake this into parent xform, maybe do matrix accumulation before writing out xforms
@@ -663,7 +668,7 @@ class SceneAscii:
                                    _rbracket=')',
                                  )
 
-        self.writeNode( _type = bellaType, _uuid = uuid )
+        self.writeNode( _type = bellaType, _uuid = uuid)
         self.writeNodeAttribNumpy( _name = 'color',
                                    _type = 'rgba',
                                    _lbracket = '(',
@@ -697,13 +702,13 @@ class SceneAscii:
         if bellaType == 'areaLight':
             if usdType == "DiskLight":
                 self.writeNodeAttrib( _name = 'shape', _value = '"disk"')
-                l_size = _lightDict['UsdLux'].GetRadiusAttr().Get() ### TODO erroneously Blender outputs diameter size 2 as  float inputs:radius = 2 
+                l_size = _lightDict[ 'UsdLux'].GetRadiusAttr().Get() ### TODO erroneously Blender outputs diameter size 2 as  float inputs:radius = 2 
                 self.writeNodeAttrib( _name = 'sizeX', _value = str( l_size) +'f') # DiskLight supports circle only areaLight supports ovals
                 self.writeNodeAttrib( _name = 'sizeY', _value = str( l_size) +'f') 
             else: ### RectLight is distinct from DiskLight, merged in areaLight
-                textureFile = _lightDict['UsdLux'].GetTextureFileAttr().Get()
-                width = _lightDict['UsdLux'].GetWidthAttr().Get()
-                height = _lightDict['UsdLux'].GetHeightAttr().Get()
+                textureFile = _lightDict[ 'UsdLux'].GetTextureFileAttr().Get()
+                width = _lightDict[ 'UsdLux'].GetWidthAttr().Get()
+                height = _lightDict[ 'UsdLux'].GetHeightAttr().Get()
                 self.writeNodeAttrib( _name = 'sizeX', _value = str( width) +'f')
                 self.writeNodeAttrib( _name = 'sizeY', _value = str( height) +'f')
 

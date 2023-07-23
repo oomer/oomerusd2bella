@@ -39,17 +39,18 @@ SOFTWARE.
 # - [ x ] explicit texcoord and normals indices ( mostly Maya )
 # - [ x ] transform anim
 # - [ x ] mesh deformation anim
+# - [ x ] converts Sdf.AssetPaths to relative path ( file textures only)
 # - [ partial ] colorDome
 # - [ partial ] imageDome
-# - [ partial ] UsdPreviewSurface -> Bella uber
-# - [ partial ] Usd PointLight -> Bella PointLight
+# - [ better ] UsdPreviewSurface -> Bella uber
+# - [ alpha ] UsdLux SphereLight, AreaLight( rectLight, diskLight), DiskLight
 # - [ partial ] UsdCamera -> Bella camera
 # - [ partial ] Usd mesh instancing -> Bella mesh instancing
 
 ### NOTES
 ###======
 # - [x] when no camera is found, an arbitrary one is created
-# - [x] rewrite file texture paths relative to -usdFile, subdir usd's reference texture using relPaths ( "../textures" ) which is wrong for .bsa
+# - [x] spotlight may not exist in Usd.Lux
 
 ### TODO
 ###===== 
@@ -89,17 +90,13 @@ parser.add_argument( '-ignoreroughness', help = "ignore specular roughness", act
 
 args = parser.parse_args()
 start_time=time.time()
-usdFile = Path(args.usdfile)
-
-#if args.usdfile: # TODO delete
-#    print('-usdfile parameter no longer needed, pass file argument directly: oomerusd2bella.py file.usdc')
-#    quit()
+usdFile = Path( args.usdfile)
 
 if not usdFile.exists():
-    print(args.usdFile,"does not exist")
+    print( args.usdFile, "does not exist")
     quit()
-if not usdFile.suffix in ['.usd','.usdc','.usda','.usdz']:
-    print(args.usdFile,"is not a .usd, .usdc, .usda or .usdz file")
+if not usdFile.suffix in [ '.usd', '.usdc', '.usda', '.usdz']:
+    print( args.usdFile, "is not a .usd, .usdc, .usda or .usdz file")
     quit()
 
 usdScene = oomUsd.Reader( _usdFile = usdFile, 
@@ -116,18 +113,18 @@ else:
     else: endFrame = args.end
 
 endFrame += 1 # Python range end not inclusive, requires end to be +1
-for timeCode in range(startFrame, endFrame, 1):  # usd timecode starts on frame 1 not 0
+for timeCode in range( startFrame, endFrame, 1):  # usd timecode starts on frame 1 not 0
     if isSequence:
-        bsa_dire = usdFile.parent.joinpath( str( usdFile.stem )+'_bsa' )  # use subdir for output, helps organize sequences
-        bsa_file = Path( usdFile.stem + str( timeCode ).zfill(5) + '.bsa')
-        bsa = oomBella.SceneAscii( _bsaFile = bsa_dire / bsa_file, 
+        bsaDire = usdFile.parent.joinpath( str( usdFile.stem)+'_bsa')  # use subdir for output, helps organize sequences
+        bsaFile = Path( usdFile.stem + str( timeCode).zfill(5) + '.bsa')
+        bsa = oomBella.SceneAscii( _bsaFile = bsaDire / bsaFile, 
                                    _usdScene = usdScene, 
                                    _colorDome = args.colordome
                                  ) 
     else:
-        bsa_file = Path( usdFile.name ).with_suffix( '.bsa' )
-        bsa = oomBella.SceneAscii( _bsaFile = usdFile.parent / bsa_file, 
-                                   _usdScene = usdScene ,
+        bsaFile = Path( usdFile.name ).with_suffix( '.bsa')
+        bsa = oomBella.SceneAscii( _bsaFile = usdFile.parent / bsaFile, 
+                                   _usdScene = usdScene,
                                    _colorDome = args.colordome
                                  )
 
@@ -136,7 +133,7 @@ for timeCode in range(startFrame, endFrame, 1):  # usd timecode starts on frame 
     # - [ ] filter by purpose, USD allows for non renderable meshes, default for Bella to render ALL meshes
     # - [ ] I believe that prototype prims were birthed at origin
     # - [ ] document thsi better, not sure what False means
-    usdScene.traverse_scene(filter_by_purpose=False)
+    usdScene.traverseScene( filter_by_purpose=False)
 
     ### MESH 
     ###=====
@@ -157,16 +154,16 @@ for timeCode in range(startFrame, endFrame, 1):  # usd timecode starts on frame 
                 npNormals, \
                 npTxcoords \
                 = usdScene.getMesh( _prim = prim, _timeCode = timeCode)
-                if not isinstance(npFaceVertexCount, np.ndarray): continue # return var == False indicates BAD ( ie zero faces ) geometry .. skip
+                if not isinstance( npFaceVertexCount, np.ndarray): continue # return var == False indicates BAD ( ie zero faces ) geometry .. skip
             except:
-                if usdScene.debug: print("FAIL:",prim,'ERROR')
+                if usdScene.debug: print( "FAIL:", prim, 'ERROR')
                 continue
 
         # isinstance(x,y) Python function to check if x is of object type y
-        if isinstance( npFaceVertexCount,np.ndarray): 
+        if isinstance( npFaceVertexCount, np.ndarray): 
             if usdScene.debug: 
                 print( '\tnpFaceVertexCount', len( npFaceVertexCount))
-        if isinstance(npFaceVertexIndices,np.ndarray):
+        if isinstance( npFaceVertexIndices, np.ndarray):
             if usdScene.debug: 
                 print( '\tnpFaceVertexIndices', len( npFaceVertexIndices))
         if isinstance( npPoints, np.ndarray):
@@ -181,7 +178,7 @@ for timeCode in range(startFrame, endFrame, 1):  # usd timecode starts on frame 
 
         ### MATERIALS
         ###==========
-        if 'material_prim' in usdScene.meshes[prim]:
+        if 'material_prim' in usdScene.meshes[ prim]:
             materialPrim = usdScene.meshes[ prim][ 'material_prim'] 
         else: materialPrim = False
 
@@ -202,8 +199,8 @@ for timeCode in range(startFrame, endFrame, 1):  # usd timecode starts on frame 
     ###=======
     if not args.ignorelights:
         for prim in usdScene.lights.keys():
-            bsa.writeLight( _lightDict = usdScene.lights[prim], 
-                            _timeCode=timeCode)
+            bsa.writeLight( _lightDict = usdScene.lights[ prim], 
+                            _timeCode = timeCode)
 
     ### CAMERA
     ###=======
@@ -233,9 +230,8 @@ for timeCode in range(startFrame, endFrame, 1):  # usd timecode starts on frame 
     ###============= 
     ### usd file string surrounded by @
     for shader in usdScene.uv_textures.keys(): 
-        #print(shader, usdScene.uv_textures[ shader ][ 'file' ], )
         bsa.writeShaderTexture( shader, 
-                                usdScene.uv_textures[ shader ][ 'file' ], 
+                                usdScene.uv_textures[ shader][ 'file'], 
                               )
 
     # not sure how I can tell that a file is used as a normalmap
@@ -244,6 +240,6 @@ for timeCode in range(startFrame, endFrame, 1):  # usd timecode starts on frame 
     #                                str(usdScene.uv_textures[ usd_prim ][ 'file' ])[ 1:-1 ], 
     #                            )
 
-    bsa.close(usdScene)
-execution_time = (time.time() - start_time)
-if usdScene.debug: print('Execution time in seconds',execution_time)
+    bsa.close( usdScene)
+execution_time = ( time.time() - start_time)
+if usdScene.debug: print( 'Execution time in seconds', execution_time)

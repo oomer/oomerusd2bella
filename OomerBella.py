@@ -35,20 +35,21 @@ from pathlib import Path  # used for cross platform file paths
 import OomerUtil as oomUtil
 
 class SceneAscii:
-    def __init__( self, out_file, 
-                  usd_stage,
-                  debug = False,
+    def __init__( self, 
+                  _bsaFile = False, 
+                  _usdScene = False,
+                  _debug = False,
                   _colorDome = False,
                 ):
-        if not out_file.parent.exists():
-            out_file.parent.mkdir()
-        self.file = open( str( out_file), 'w')
+        if not _bsaFile.parent.exists():
+            _bsaFile.parent.mkdir()
+        self.file = open( str( _bsaFile), 'w')
         self.renderer_up_axis = 'Z'
         self.world_nodes = []
-        self.stage = usd_stage
+        self.stage = _usdScene
         self.image_dome = False
         self.colorDome = _colorDome
-        self.debug = debug
+        self.debug = _debug
 
         self.writeHeader()
         self.writeGlobal()
@@ -374,8 +375,9 @@ class SceneAscii:
     # - [ ] USD mesh nodes have an optional xform attribute, Bella mesh nodes don't
     # - [ ] is time code even needed
     def writeXform( self, 
-                    _prim, 
-                    _usdScene
+                    _prim = False, 
+                    _usdScene = False,
+                    _timeCode = 1,
                   ):
         
         # Workaround to get useful name from Animal Logic prototype
@@ -386,6 +388,7 @@ class SceneAscii:
             if isinstance( alusd_name, str): prim_name = alusd_name  
         name = oomUtil.uuidSanitize( primName, _hashSeed = _prim.GetPath() ) 
 
+        self.stage.xform_cache.SetTime( _timeCode)  ### Set xform cache to animation time
         np_matrix4 = np.array( self.stage.xform_cache.GetLocalTransformation( _prim)[0]) #flatten transforms to mat4
 
         self.writeNode( _type = 'xform', _uuid = name)

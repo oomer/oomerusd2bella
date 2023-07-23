@@ -36,23 +36,21 @@ import OomerUtil as oomUtil
 
 class Reader:
     def __init__(   self, 
-                    inFile, 
+                    _usdFile = False, 
                     _debug=False,
                     _usda=False,
                     _unittest=False,
                 ):
             
-        self.file = inFile
-
-
+        self.file = _usdFile
         self.debug = _debug
         self.unittest = _unittest
 
         if not _unittest:
-            self.stage = Usd.Stage.Open( str( inFile ) )
-            if _usda: self.stage.Export( "./"+str( Path( inFile).with_suffix( '.usda')))
+            self.stage = Usd.Stage.Open( str( _usdFile ) )
+            if _usda: self.stage.Export( "./"+str( Path( _usdFile).with_suffix( '.usda')))
         else:
-            self.stage = Usd.Stage.CreateInMemory( inFile )
+            self.stage = Usd.Stage.CreateInMemory( _usdFile )
 
         self.meshes = {}
         self.lights = {}

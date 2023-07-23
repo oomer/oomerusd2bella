@@ -75,36 +75,36 @@ import numpy as np
 import OomerUsd     as oomUsd   # USD read routines
 import OomerBella   as oomBella # Bella write routines
 
-parser = argparse.ArgumentParser("oomerusd2bella")
-parser.add_argument('usdfile', help="path to usd file", default="./usd/rubbertoy.usda", type=str)
-parser.add_argument('-start', dest="start", help="sequence start frame", default=0 , type=int)
-parser.add_argument('-end', dest="end", help="sequence end frame", default=0, type=int)
-parser.add_argument('-debug', action='store_true') 
-parser.add_argument('-usda', help="output usda", action='store_true')
-parser.add_argument('-colordome', help="insert white color dome", action='store_true')
-parser.add_argument('-ignorelights', help="ignorelights", action='store_true')
-parser.add_argument('-ignorematerials', help="ignorematerials", action='store_true')
-parser.add_argument('-subdivision', dest="subdivision", help="force subdivision level", default=0, type=int)
-parser.add_argument('-ignoreroughness', help="ignore specular roughness", action='store_true')
+parser = argparse.ArgumentParser( "oomerusd2bella")
+parser.add_argument( 'usdfile', help = "path to usd file", default = "./usd/rubbertoy.usda", type = str)
+parser.add_argument( '-start', dest = "start", help = "sequence start frame", default = 0, type = int)
+parser.add_argument( '-end', dest = "end", help = "sequence end frame", default = 0, type = int)
+parser.add_argument( '-debug', action = 'store_true') 
+parser.add_argument( '-usda', help = "output usda", action = 'store_true')
+parser.add_argument( '-colordome', help = "insert white color dome", action = 'store_true')
+parser.add_argument( '-ignorelights', help = "ignorelights", action = 'store_true')
+parser.add_argument( '-ignorematerials', help = "ignorematerials", action = 'store_true')
+parser.add_argument( '-subdivision', dest = "subdivision", help="force subdivision level", default = 0, type = int)
+parser.add_argument( '-ignoreroughness', help = "ignore specular roughness", action = 'store_true')
 
 args = parser.parse_args()
 start_time=time.time()
-usd_file = Path(args.usdfile)
+usdFile = Path(args.usdfile)
 
 #if args.usdfile: # TODO delete
 #    print('-usdfile parameter no longer needed, pass file argument directly: oomerusd2bella.py file.usdc')
 #    quit()
 
-if not usd_file.exists():
-    print(args.usdfile,"does not exist")
+if not usdFile.exists():
+    print(args.usdFile,"does not exist")
     quit()
-if not usd_file.suffix in ['.usd','.usdc','.usda','.usdz']:
-    print(args.usdfile,"is not a .usd, .usdc, .usda or .usdz file")
+if not usdFile.suffix in ['.usd','.usdc','.usda','.usdz']:
+    print(args.usdFile,"is not a .usd, .usdc, .usda or .usdz file")
     quit()
 
-usdScene = oomUsd.Reader( usd_file, 
-                          _debug=args.debug,
-                          _usda=args.usda,
+usdScene = oomUsd.Reader( _usdFile = usdFile, 
+                          _debug = args.debug,
+                          _usda = args.usda,
                         )
 
 # USD can store animations both transforms and mesh deformations
@@ -118,16 +118,16 @@ else:
 endFrame += 1 # Python range end not inclusive, requires end to be +1
 for timeCode in range(startFrame, endFrame, 1):  # usd timecode starts on frame 1 not 0
     if isSequence:
-        bsa_dire = usd_file.parent.joinpath( str( usd_file.stem )+'_bsa' )  # use subdir for output, helps organize sequences
-        bsa_file = Path( usd_file.stem + str( timeCode ).zfill(5) + '.bsa')
-        bsa = oomBella.SceneAscii( bsa_dire / bsa_file, 
-                                   usdScene, 
+        bsa_dire = usdFile.parent.joinpath( str( usdFile.stem )+'_bsa' )  # use subdir for output, helps organize sequences
+        bsa_file = Path( usdFile.stem + str( timeCode ).zfill(5) + '.bsa')
+        bsa = oomBella.SceneAscii( _bsaFile = bsa_dire / bsa_file, 
+                                   _usdScene = usdScene, 
                                    _colorDome = args.colordome
                                  ) 
     else:
-        bsa_file = Path( usd_file.name ).with_suffix( '.bsa' )
-        bsa = oomBella.SceneAscii( usd_file.parent / bsa_file, 
-                                   usdScene ,
+        bsa_file = Path( usdFile.name ).with_suffix( '.bsa' )
+        bsa = oomBella.SceneAscii( _bsaFile = usdFile.parent / bsa_file, 
+                                   _usdScene = usdScene ,
                                    _colorDome = args.colordome
                                  )
 
@@ -215,7 +215,10 @@ for timeCode in range(startFrame, endFrame, 1):  # usd timecode starts on frame 
     ### XFORM
     ###======
     for prim in usdScene.xforms.keys():
-        bsa.writeXform( prim, usdScene )
+        bsa.writeXform( _prim = prim,
+                        _usdScene = usdScene,
+                        _timeCode = timeCode,
+                      )
 
     ### USDPREVIEWSURFACE
     ###==================

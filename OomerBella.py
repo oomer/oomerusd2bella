@@ -26,6 +26,7 @@ SOFTWARE.
 
 ## third party modules
 import numpy as np
+from pxr import Usd, Gf, UsdGeom, UsdShade, UsdLux 
 
 ## standard modules
 from pathlib import Path  # used for cross platform file paths
@@ -116,12 +117,14 @@ class SceneAscii:
                                     str( _rgba[3]) + ');\n'
                        )
         self.file.write(self.nice('variation') + str( _variation) + 'f;\n')
+
     ##
     def writeNodeAttrib( self, _name = False, _connected = False, _value = False):
         if _connected:
             self.file.write('  .' + f'{_name:26}' + '|= ' + _value + ';\n')
         else:
             self.file.write('  .' + f'{_name:27}' + '= ' + _value + ';\n')
+
 
     def writeFloat( self, _name = False, _value= 1.0):
         self.file.write(self.nice(_name) + str( _value) + 'f;\n')
@@ -280,7 +283,7 @@ class SceneAscii:
                                  )
 
     def writeMesh( self, 
-                   _usdPrim, 
+                   _prim, 
                    _npVertexCount,
                    _npVertexIndices, 
                    _npPoints, 
@@ -300,14 +303,14 @@ class SceneAscii:
         if _colordome: self.colorDome=True
 
         ####type_name = usd_prim.GetTypeName()
-        primName = _usdPrim.GetName()
-        uuid = oomUtil.uuidSanitize( _usdPrim.GetName(), _hashSeed = _usdPrim.GetPath())
+        primName = _prim.GetName()
+        uuid = oomUtil.uuidSanitize( _prim.GetName(), _hashSeed = _prim.GetPath())
         if material_prim:
             material_name = oomUtil.uuidSanitize( material_prim.GetName(), _hashSeed = material_prim.GetPath())
         else:
             material_name = "None"
 
-        np_matrix4 = np.array( xform_cache.GetLocalTransformation( _usdPrim)[0])
+        np_matrix4 = np.array( xform_cache.GetLocalTransformation( _prim)[0])
         # INSERT XFORM 
         # the name of xform should be the same as usd gprim
         # this way the GetChildren() query done anywhere will be correct
@@ -371,19 +374,19 @@ class SceneAscii:
     # - [ ] USD mesh nodes have an optional xform attribute, Bella mesh nodes don't
     # - [ ] is time code even needed
     def writeXform( self, 
-                    _usdPrim, 
+                    _prim, 
                     _usdScene
                   ):
         
         # Workaround to get useful name from Animal Logic prototype
-        primName = _usdPrim.GetName() # no wackiness here
+        primName = _prim.GetName() # no wackiness here
         alusd_name = False 
-        if _usdPrim in _usdScene.prototype_children: # Spelunk and try to find useful name  
-            alusd_name = _usdPrim.GetAttribute( 'alusd_originalName').Get() # [ ] GetName() gives us a useless "GEO" name, original name much more relevant
+        if _prim in _usdScene.prototype_children: # Spelunk and try to find useful name  
+            alusd_name = _prim.GetAttribute( 'alusd_originalName').Get() # [ ] GetName() gives us a useless "GEO" name, original name much more relevant
             if isinstance( alusd_name, str): prim_name = alusd_name  
-        name = oomUtil.uuidSanitize( primName, _hashSeed = _usdPrim.GetPath() ) 
+        name = oomUtil.uuidSanitize( primName, _hashSeed = _prim.GetPath() ) 
 
-        np_matrix4 = np.array( self.stage.xform_cache.GetLocalTransformation( _usdPrim)[0]) #flatten transforms to mat4
+        np_matrix4 = np.array( self.stage.xform_cache.GetLocalTransformation( _prim)[0]) #flatten transforms to mat4
 
         self.writeNode( _type = 'xform', _uuid = name)
         self.writeNodeAttrib( _name = 'name',
@@ -392,9 +395,9 @@ class SceneAscii:
 
         # - [2024] document prototypes and test 
         # - add unit tests
-        if _usdPrim in _usdScene.prototype_instances: 
+        if _prim in _usdScene.prototype_instances: 
             # handler for top level prototype prims, ie the NS:GEO node in Animal Logic Assets
-            childPrim = _usdScene.prototype_instances[ _usdPrim]
+            childPrim = _usdScene.prototype_instances[ _prim]
             if childPrim:
                 alusd_name = childPrim.GetAttribute( 'alusd_originalName').Get()
                 if isinstance( alusd_name, str):
@@ -406,7 +409,7 @@ class SceneAscii:
                                     )
 
         else:  # normal workflow, including children of toplevel prototype prims
-            for childPrim in _usdPrim.GetChildren():
+            for childPrim in _prim.GetChildren():
                 childName = oomUtil.uuidSanitize( childPrim.GetName(), _hashSeed = childPrim.GetPath())
                 if childPrim in _usdScene.meshes: # is mesh?
                     self.writeNodeAttrib( _name = 'children[*]', _value = childName)
@@ -510,21 +513,21 @@ class SceneAscii:
                                    _rbracket = ')',
                                  )
 
-    def writeFileTexture( self,
-                          _usdPrim,
+    def writeShaderTexture( self,
+                          _usdShader,
                           _filePath,
                         ):
-        uuid = oomUtil.uuidSanitize( _usdPrim.GetName(), _hashSeed = _usdPrim.GetPath())
+        uuid = oomUtil.uuidSanitize( _usdShader.GetPrim().GetName(), _hashSeed = _usdShader.GetPath())
         self.writeNode( _type='fileTexture', _uuid = uuid)
         self.file.write( self.nice('dir')  + '"' + str( _filePath.parent)+'";\n' )
         self.file.write( self.nice('ext')  + '"' + str( _filePath.suffix) +'";\n' )
         self.file.write( self.nice('file') + '"' + str( _filePath.stem) +'";\n' )
 
     def writeNormalTexture( self,
-                            _usdPrim,
+                            _prim,
                             _filePath,
                           ):
-        uuid = oomUtil.uuidSanitize( _usdPrim.GetName(), _hashSeed = _usdPrim.GetPath()) + 'normalMap'
+        uuid = oomUtil.uuidSanitize( _prim.GetName(), _hashSeed = _prim.GetPath()) + 'normalMap'
         self.writeNode( _type = 'normalMap', _uuid = uuid)
         bella_file = Path( _filePath)
         self.file.write( self.nice( 'dir')  + '"' + str( _filePath.parent) + '";\n')
@@ -532,10 +535,12 @@ class SceneAscii:
         self.file.write( self.nice( 'file') + '"' + str( _filePath.stem)   + '";\n')
 
     def writeUberMaterial( self,
-                           _usdPrim,
-                           _usdScene,
+                           _prim  = False,
+                           _usdScene = False,
+                           _forceRoughness = False,
+                           _ignoreRoughness = False,
                          ):
-        uuid = oomUtil.uuidSanitize( _usdPrim.GetName(), _hashSeed = _usdPrim.GetPath())
+        uuid = oomUtil.uuidSanitize( _prim.GetName(), _hashSeed = _prim.GetPath())
         self.writeNode( _type = 'uber', _uuid = uuid)
 
         ### USD shaders are defined in a node network
@@ -552,50 +557,64 @@ class SceneAscii:
         # - [x] support imagemaps
         # - [ ] support normalmaps 
         # - [ ] should ambient occlusion blend multiply with base color
-        # found UsdPreviewSurfaces were stored in a dictionary _usdScene.preview_surfaces
+        # found UsdPreviewSurfaces were stored in a dictionary _usdScene.previewSurfaces
         # Python dict key is ( nodeInput or attribute, UsdPrim or null) 
 
         # _usdScene.usdPreviewSurface dictionary keys=shaderInputs val=bellaName
-        for shaderInput in _usdScene.usdPreviewSurface:
-            if ( shaderInput, 'connection_prim') in _usdScene.preview_surfaces[ _usdPrim]: # why did I use a tuple for the key, is this elegant or complicated
-                # i think I used a tuple, rather than a string ie normal_connection_prim
-                if shaderInput == 'normal':
-                    outType = '.outNormal'
-                    inputPrim = _usdScene.preview_surfaces[ _usdPrim][( shaderInput, 'connection_prim')]
-                    inputName = oomUtil.uuidSanitize( inputPrim.GetName(), _hashSeed = inputPrim.GetPath())
-                    inputName += 'normalMap'
-                    self.writeNodeAttrib( _name = self.usdPreviewSurface[ shaderInput],
-                                          _value = inputName + outType,
-                                          _connected = True,
+        #print( 'uber', _usdScene.previewSurfaces[ _prim])
+        # Naive creation of uber material limits UsdPreviewSurface to a meager node shading network
+        # of either a file texture or a value stores on the material
+
+        ### naivePrimOrVal : naive in this case because the network shader is not properly traversed
+        ### each attribute is assumed either a file texture or a local value
+        ### outType = '.outColor'
+        for shaderInputName in _usdScene.usdPreviewSurface: # loop over all UsdPreviewSurface input names
+            if shaderInputName in _usdScene.previewSurfaces[ _prim]:
+                naivePrimOrVal = _usdScene.previewSurfaces[ _prim][ shaderInputName] # dict stores next shader prim or val
+                if type( naivePrimOrVal) == Gf.Vec3f:
+                    self.writeNodeAttrib( _name = self.usdPreviewSurface[ shaderInputName],
+                                            _value = 'rgba(' + str( naivePrimOrVal[0]) +
+                                            ' ' +
+                                            str( naivePrimOrVal[1]) +
+                                            ' ' +
+                                            str( naivePrimOrVal[2]) +
+                                            ' 1 )'
                                         )
-                else: # directly connected fileTexure
-                    if shaderInput == 'diffuseColor': outType = '.outColor'
+                elif type( naivePrimOrVal) == float:
+                    if shaderInputName in ('opacity', 'roughness'): 
+                        if _forceRoughness:
+                            floatString = str( _forceRoughness * 100)+'f'
+                        else:
+                            floatString = str( naivePrimOrVal * 100)+'f'
+                    else: 
+                        floatString = str( naivePrimOrVal)+'f'
+                    if shaderInputName == 'metallic': 
+                        self.writeNodeAttrib( _name = 'base.metallicRoughness',
+                                            _value = '0f',
+                                            )
+                    if not _ignoreRoughness:
+                        self.writeNodeAttrib( _name = self.usdPreviewSurface[ shaderInputName],
+                                              _value = floatString,
+                                            )
+
+                elif type( naivePrimOrVal) == int:
+                    self.writeNodeAttrib( _name = self.usdPreviewSurface[ shaderInputName],
+                                          _value = str( naivePrimOrVal),
+                                        )
+                elif type( naivePrimOrVal) == UsdShade.Shader:
+                    if shaderInputName == 'diffuseColor': outType = '.outColor'
                     else: outType = '.outAverage'
-                    inputPrim = _usdScene.preview_surfaces[ _usdPrim][( shaderInput, 'connection_prim')]
-                    inputName = oomUtil.uuidSanitize( inputPrim.GetName(), _hashSeed = inputPrim.GetPath())
-                    self.writeNodeAttrib( _name = self.usdPreviewSurface[ shaderInput],
-                                          _value = inputName + outType,
+                    if shaderInputName == 'metallic': 
+                        self.writeNodeAttrib( _name = 'base.metallicRoughness',
+                                            _value = '0f',
+                                            )
+                    uuidTexture = oomUtil.uuidSanitize( naivePrimOrVal.GetPrim().GetName(), _hashSeed = naivePrimOrVal.GetPath())
+                    self.writeNodeAttrib( _name = self.usdPreviewSurface[ shaderInputName],
+                                          _value = uuidTexture + outType,
                                           _connected = True,
                                         )
-            else:
-                if shaderInput in _usdScene.preview_surfaces[ _usdPrim]:
-                    if shaderInput != 'opacity': # opacity erroneously set to 1 should be 100
-                        shaderValue = _usdScene.preview_surfaces[ _usdPrim][ shaderInput]
-                        if type( shaderValue) == float:
-                            self.writeFloat( _name = self.usdPreviewSurface[ shaderInput],
-                                             _value = shaderValue,
-                                           )
-                        if shaderInput == 'diffuseColor': #pxr.Gf.Vec3f
-                            self.writeNodeAttrib( _name = 'base.color',
-                                                  _value = 'rgba(' + str( shaderValue[0]) +
-                                                  ' ' +
-                                                  str( shaderValue[1]) +
-                                                  ' ' +
-                                                  str( shaderValue[2]) +
-                                                  ' 1 )'
-                                                )
-                        if shaderInput == 'roughness': 
-                            self.writeNodeAttrib( _name = 'specular.roughness', _value = str( shaderValue * 100) + 'f' )
+                #else:
+                #    print(type( naivePrimOrVal))
 
     def writeLight( self, 
                     _lightDict=False,
@@ -666,7 +685,7 @@ class SceneAscii:
             self.writeImageDome( fileDome.suffix, fileDome.parent, fileDome.stem)
             self.image_dome = uuid
 
-        ### TODO Blender 3.6 USD only exports spotlight xform, there is no SpotLight prim
+        ### TODO Blender 3.6 USD only exports spotlight xform, there is no UsdLux.SpotLight
         ### can add a -blenderspotlighthack where xforms with a certain name, or a custom attrib
         if bellaType == 'spotLight':
             self.writeNodeAttrib( _name = 'aperture', _value = '100f')

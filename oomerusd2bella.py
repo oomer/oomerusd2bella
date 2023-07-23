@@ -85,6 +85,7 @@ parser.add_argument('-colordome', help="insert white color dome", action='store_
 parser.add_argument('-ignorelights', help="ignorelights", action='store_true')
 parser.add_argument('-ignorematerials', help="ignorematerials", action='store_true')
 parser.add_argument('-subdivision', dest="subdivision", help="force subdivision level", default=0, type=int)
+parser.add_argument('-ignoreroughness', help="ignore specular roughness", action='store_true')
 
 args = parser.parse_args()
 start_time=time.time()
@@ -201,7 +202,6 @@ for timeCode in range(startFrame, endFrame, 1):  # usd timecode starts on frame 
     ###=======
     if not args.ignorelights:
         for prim in usdScene.lights.keys():
-            print(usdScene.lights[prim]['UsdLux'])
             bsa.writeLight( _lightDict = usdScene.lights[prim], 
                             _timeCode=timeCode)
 
@@ -220,16 +220,20 @@ for timeCode in range(startFrame, endFrame, 1):  # usd timecode starts on frame 
     ### USDPREVIEWSURFACE
     ###==================
     if not args.ignorematerials:
-        for prim in usdScene.preview_surfaces.keys():  
-            bsa.writeUberMaterial( prim, usdScene )
+        for prim in usdScene.previewSurfaces.keys():  
+            bsa.writeUberMaterial(  _prim = prim, 
+                                    _usdScene = usdScene,
+                                    _ignoreRoughness = args.ignoreroughness,
+                                 )
 
     ### USDUVTEXTURE
     ###============= 
     ### usd file string surrounded by @
-    for prim in usdScene.uv_textures.keys(): 
-        bsa.writeFileTexture( prim, 
-                              usdScene.uv_textures[ prim ][ 'file' ], 
-                            )
+    for shader in usdScene.uv_textures.keys(): 
+        #print(shader, usdScene.uv_textures[ shader ][ 'file' ], )
+        bsa.writeShaderTexture( shader, 
+                                usdScene.uv_textures[ shader ][ 'file' ], 
+                              )
 
     # not sure how I can tell that a file is used as a normalmap
     #for usd_prim in usdScene.uv_textures.keys(): # write out usd uv textures as bella file textures

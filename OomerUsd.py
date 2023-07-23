@@ -58,7 +58,7 @@ class Reader:
         self.lights = {}
         self.xforms = {}
         self.cameras = {}
-        self.preview_surfaces = {}
+        self.previewSurfaces = {}
         self.uv_textures = {}
         self.prototype_instances = {}
         self.prototype_children = []
@@ -185,9 +185,8 @@ class Reader:
 
             # - [ ] Treat UsdPreviewSurface as a equivalent to a Bella PBR material
             if eachPrim.GetTypeName() == 'Material' and eachPrim not in ignorePrim and 'proxy' not in eachPrim.GetName(): # filter out proxy materials
-                self.preview_surfaces[ eachPrim] = {} # [ ] one UsdPreviewSurface becomes 1 bella quickMaterial
-                surfaceOutput = eachPrim.GetAttribute( 'outputs:surface')
-
+                self.previewSurfaces[ eachPrim] = {} # [ ] one UsdPreviewSurface becomes 1 bella quickMaterial
+                surfaceOutput = eachPrim.GetAttribute( 'outputs:surface') # TODO change this raw attribute access
                 # A material probably holds a unique surface shader and then instances of UsdUVTextures
                 # to ingest the material, we populate 
 
@@ -195,78 +194,70 @@ class Reader:
                 # Could do a proper traversal of actually used shader connections instead
                 # to avoid proxy textures
                 # - [ ] document what PrimRange does
-                for each in Usd.PrimRange( eachPrim): ## ( subtree traversal depth first)
-                    infoId = each.GetAttribute( 'info:id').Get()
-                    if infoId == 'UsdUVTexture':
-                        ### file paths are relative to .usd file where they are defined
-                        ### ./main.usd
-                        ### ./textureDir/cat.png
-                        ### ./geomDir/cat.usd
-                        # -- ./geomdir/cat.usd is referenced is ./main.usd
-                        # -- cat.usd uses texture with a locator string "../textureDir/cat.png"
-                        # -- during scene composition, all prims appear under one scenegraph
-                        # -- but "../textureDir/cat.png" 
-                        #maybe flattewn
+                for shaderNetworkPrim in Usd.PrimRange( eachPrim): ## ( subtree traversal depth first), it this the same as gathering all the nodes of a shader network
+                    usdShader = UsdShade.Shader(shaderNetworkPrim)
+                    idAttr = usdShader.GetIdAttr()
+                    if idAttr:
+                        infoId = idAttr.Get()
+                        usdShader = UsdShade.Shader(shaderNetworkPrim)
 
-                        ### This is how NOT to get an attrib
-                        ### file = self.GetAttribute( each.GetAttribute( 'inputs:file'))
-                        ### this gets a raw string and is inappropriate because we need
-                        ### sdfAssetPath.resolvedPath because the raw string will either be relative OR absolute
+                        if infoId == 'UsdPreviewSurface':
+                            self.previewSurfaces[ eachPrim][ 'shader'] = shaderNetworkPrim # TODO is 'shader' referenced
+                            # - [ ] when a diffuseColor is found, this is good enough to claim
+                            # - [ ] this prim can be converted to a PBR material
+                            # _input.GetConnections()[0] # - [x] why more than one, in a node architecture, each attribute is designed to allow more than one input although max is usually one
+                            # - [ 2024 ] a rich node based architecture allows lots of diff type of inputs from procedurals to files to constants
+                            # - [ 2024 ] right now I am assuming the use of inputs:file rather than say a checkerboard procedural
+                            # - [ 2024 ] when I embark on MaterialX, these assumptions will be revisited
+                            for shaderAttributeName in self.usdPreviewSurface.keys(): # loop over this dictionary mapping usdpreviewsurface to bella uber
+                                shaderAttribute = usdShader.GetInput( shaderAttributeName)
+                                if shaderAttribute and shaderAttributeName != 'normal':
+                                    attribValue = shaderAttribute.Get()
+                                    connectedPrimTuple = shaderAttribute.GetConnectedSource()
+                                    if connectedPrimTuple: # Is input connected to another node
+                                        connectableAPI = connectedPrimTuple[0]
+                                        shaderPrim = UsdShade.Shader( connectableAPI.GetPrim())
+                                        infoId2 = shaderPrim.GetIdAttr().Get()
+                                        if infoId2 == 'UsdUVTexture':
+                                            ### file paths are relative to .usd file where they are defined
+                                            ### ./main.usd
+                                            ### ./textureDir/cat.png
+                                            ### ./geomDir/cat.usd
+                                            # -- ./geomdir/cat.usd is referenced is ./main.usd
+                                            # -- cat.usd uses texture with a locator string "../textureDir/cat.png"
+                                            # -- during scene composition, all prims appear under one scenegraph
+                                            # -- but "../textureDir/cat.png" 
+                                            #maybe flattewn
 
-                        usdShader = UsdShade.Shader(each)
-                        sdfAssetPath = usdShader.GetInput('file').Get() ### shader <- input <- sdfAssetPath
-                        absFilePath = sdfAssetPath.resolvedPath ### total API confusion, this attrib not documented, got by trying to use GetResolvedPath() and API suggested resolvedPath
-                        relFilePath = sdfAssetPath.path
-                        ### My newbie c++ brain finally figured out that .path and .resolvedPath
-                        ### SDF_API SdfAssetPath ( const std::string & 	path,
-                        ###                        const std::string & 	resolvedPath 
-                        ###                      )	
-                        if (self.file.parent != Path(absFilePath)): ### Use relative path unless in same dir
-                            file = Path(absFilePath).relative_to( self.file.parent.resolve() ) ### calculate texture relative to -usdfile path
-                        else:
-                            file = Path(absFilePath)
-                        wrapS = str( each.GetAttribute( 'inputs:wrapS').Get())
-                        wrapT = str( each.GetAttribute( 'inputs:wrapT').Get())
-                        self.uv_textures[ each] = {} # [ ] one UsdUvTexture becomes 1 bella fileTexture
-                        self.uv_textures[ each][ 'file'] = file
-                        self.uv_textures[ each][ 'wrapS'] = wrapS
-                        self.uv_textures[ each][ 'wrapT'] = wrapT
-                        self.uv_textures[ each][ '_bellatype'] = 'fileTexture'
+                                            ### This is how NOT to get an attrib
+                                            ### file = self.GetAttribute( each.GetAttribute( 'inputs:file'))
+                                            ### this gets a raw string and is inappropriate because we need
+                                            ### sdfAssetPath.resolvedPath because the raw string will either be relative OR absolute
 
-                if surfaceOutput.HasAuthoredConnections(): 
-                    surfaceConnection =  surfaceOutput.GetConnections()[ 0] # assume first one [ ] why is there more than one?
-                    surfaceShader = Usd.Stage.GetPrimAtPath( self.stage, surfaceConnection.GetPrimPath()) 
-                    infoId = surfaceShader.GetAttribute( 'info:id').Get()
-                    if infoId == 'UsdPreviewSurface': 
-                        self.preview_surfaces[ eachPrim][ 'shader'] = surfaceShader # TODO is 'shader' referenced
-                        # - [ ] when a diffuseColor is found, this is good enough to claim
-                        # - [ ] this prim can be converted to a PBR material
-                        # _input.GetConnections()[0] # - [x] why more than one, in a node architecture, each attribute is designed to allow more than one input although max is usually one
-                        # - [ 2024 ] a rich node based architecture allows lots of diff type of inputs from procedurals to files to constants
-                        # - [ 2024 ] right now I am assuming the use of inputs:file rather than say a checkerboard procedural
-                        # - [ 2024 ] when I embark on MaterialX, these assumptions will be revisited
-
-                        for shaderInput in self.usdPreviewSurface.keys():
-                            if surfaceShader.HasAttribute( 'inputs:'+ shaderInput):
-                                shaderAttribute = surfaceShader.GetAttribute( 'inputs:'+ shaderInput)
-                                if shaderAttribute.HasAuthoredConnections(): # A connection is an incoming input to prim
-                                    # - [ ] this only handles file references and not procedurals
-                                    connectionPrim = Usd.Stage.GetPrimAtPath( self.stage, shaderAttribute.GetConnections()[ 0].GetPrimPath()) # discover incoming prim
-                                    ###fix 2024 if eachInput == 'normal': # - [ ] hack to set bella conversion type required
-                                    ###    self.uv_textures[_connection_prim]['_bellatype'] = 'normalMap'
-                                    self.preview_surfaces[ eachPrim][ shaderInput] = self.GetAttribute( connectionPrim.GetAttribute( 'inputs:file')) # - [ ] sdf get filepath
-                                    self.preview_surfaces[ eachPrim][ ( shaderInput, 'connection_prim')] = connectionPrim
-                                else: 
-                                    self.preview_surfaces[ eachPrim][ shaderInput] = shaderAttribute.Get() # - [ ] local value
-
-                        if surfaceShader.HasAttribute( 'inputs:diffuseColor'):
-                            shaderAttribute = surfaceShader.GetAttribute( 'inputs:diffuseColor')
-                            if shaderAttribute.HasAuthoredConnections(): # means there is a prim input
-                                attribConnection =  shaderAttribute.GetConnections()[ 0] # assume first one [ ] why is there more than one?
-                                connectionPrim = Usd.Stage.GetPrimAtPath( self.stage, attribConnection.GetPrimPath()) 
-                                self.preview_surfaces[ eachPrim][ 'connection'] = connectionPrim
-                            else:
-                                if self.debug: print( shaderAttribute.Get())
+                                            sdfAssetPath = shaderPrim.GetInput('file').Get() ### shader <- input <- sdfAssetPath
+                                            absFilePath = sdfAssetPath.resolvedPath ### total API confusion, this attrib not documented, got by trying to use GetResolvedPath() and API suggested resolvedPath
+                                            relFilePath = sdfAssetPath.path
+                                            ### My newbie c++ brain finally figured out that .path and .resolvedPath
+                                            ### SDF_API SdfAssetPath ( const std::string & 	path,
+                                            ###                        const std::string & 	resolvedPath 
+                                            ###                      )	
+                                            if (self.file.parent != Path(absFilePath)): ### Use relative path unless in same dir
+                                                file = Path(absFilePath).relative_to( self.file.parent.resolve() ) ### calculate texture relative to -usdfile path
+                                            else:
+                                                file = Path(relFilePath)
+                                            sourceColorSpace = usdShader.GetInput( 'sourceColorSpace').Get()
+                                            wrapS = shaderPrim.GetInput( 'wrapS').Get()
+                                            wrapT = shaderPrim.GetInput( 'wrapT').Get()
+                                            self.uv_textures[ shaderPrim] = {} # [ ] one UsdUvTexture becomes 1 bella fileTexture
+                                            self.uv_textures[ shaderPrim][ 'file'] = file
+                                            self.uv_textures[ shaderPrim][ 'wrapS'] = wrapS
+                                            self.uv_textures[ shaderPrim][ 'wrapT'] = wrapT
+                                            self.uv_textures[ shaderPrim][ '_bellatype'] = 'fileTexture'
+                                        #if infoId == 'UsdPrimvarReader_float2':
+                                        #    print( 'hello', usdShade3.GetInput('varname').Get())
+                                        self.previewSurfaces[ eachPrim][ shaderAttributeName] = shaderPrim
+                                    else: # store local value
+                                        self.previewSurfaces[ eachPrim][ shaderAttributeName] = attribValue
 
             if eachPrim.GetTypeName() == 'Camera':
                 self.cameras[ eachPrim ]  = {}

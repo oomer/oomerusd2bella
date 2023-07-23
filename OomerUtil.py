@@ -45,7 +45,6 @@ class Mappings:
                                   'opacity':'opacity',
                                   'roughness':'specular.roughness',
                                   'specular':'specular',
-                                  'specular2':'specular',
                                   }
 
 def str_increment(s):

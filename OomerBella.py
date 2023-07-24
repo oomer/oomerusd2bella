@@ -321,13 +321,13 @@ class SceneAscii:
         # INSERT XFORM 
         # the name of xform should be the same as usd gprim
         # this way the GetChildren() query done anywhere will be correct
-        # since we create intermediate xforms here, renaming the gprim is easy 
+        # since we create intermediate xforms here, renaming the prim with mesh is easy 
         self.writeNode( _type = 'xform',
                         _uuid = uuid,
                        )
         self.writeNodeAttrib( _name = 'name', _value= '"' + primName + '"')
         uuid += '_m' # xform gets OG name, mesh gets _mesh name
-        np_matrix4_1d = np_matrix4.ravel()  # reshape [[a1, b1, c1, d1],[a2, b2, c2, d2]] to [(a1 b1 c1 d1 a2 b2 c2 d2)] for np.savetxt
+        np_matrix4_1d = np_matrix4.ravel()  # reshape [[a1, b1, c1, d1],[a2, b2, c2, d2]] to [(a1 b1 c1 d1 a2 b2 c2 d2)] 
         self.writeNodeAttrib( _name = 'children[*]', _value = uuid)
         self.writeNodeAttribNumpy( _name = 'steps[0].xform',
                                    _type = 'mat4',
@@ -335,9 +335,10 @@ class SceneAscii:
                                    _nparray = np_matrix4_1d,
                                    _rbracket = ')',
                                  )
-        self.writeNodeAttrib( _name = 'material',       
-                              _value = material_name,
-                            )
+        if material_name != 'None':
+            self.writeNodeAttrib( _name = 'material',       
+                                _value = material_name,
+                                )
 
         self.writeNode( _type = 'mesh', _uuid = uuid)
         self.writeNodeAttrib( _name = 'name', _value = '"' + primName + '"')
@@ -353,10 +354,10 @@ class SceneAscii:
                                  )
 
         self.writeNodeAttribNumpy( _name = 'steps[0].normals',
-                                   _type = 'vec3f[' + str( _npNormals.size) + ']',
+                                   _type = 'vec3f[' + str( len( _npNormals)) + ']',
                                    _nparray = _npNormals,
                                  )
-    
+       
         try:
             if isinstance( np_texcoords_vertex_buffer, np.ndarray): # fail on non np.ndarray
                 self.writeNodeAttribNumpy( _name = 'steps[0].uvs',
@@ -375,6 +376,26 @@ class SceneAscii:
         #self.writeNodeAttrib( attribute_name = 'optimized',       
         #                           attribute_value='true',
         #                         )
+
+    def writeInstance(  self,
+                        _prim = False,
+                        _instancePrim = False, 
+                     ):
+        primName = _prim.GetName() # no wackiness here
+        name = oomUtil.uuidSanitize( primName, _hashSeed = _prim.GetPath()) 
+        instancePrimName = _instancePrim.GetName() # no wackiness here
+        instanceName = oomUtil.uuidSanitize( instancePrimName, _hashSeed = _instancePrim.GetPath()) 
+        self.writeNode( _type = 'xform', _uuid = name)
+        self.writeNodeAttrib( _name = 'name',
+                              _value = '"' + primName + '"',
+                            )
+        self.writeNodeAttrib( _name = 'children[*]', _value = instanceName)
+        self.writeNodeAttribNumpy( _name = 'steps[0].xform',
+                                   _type = 'mat4',
+                                   _nparray = np.array( [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]], dtype='float64'),
+                                   _lbracket = '(',
+                                   _rbracket = ')',
+                                 )
 
     #2024 refactored
     # - [ ] USD mesh nodes have an optional xform attribute, Bella mesh nodes don't

@@ -181,19 +181,23 @@ for timeCode in range( startFrame, endFrame, 1):  # usd timecode starts on frame
         if 'material_prim' in usdScene.meshes[ prim]:
             materialPrim = usdScene.meshes[ prim][ 'material_prim'] 
         else: materialPrim = False
-
-        bsa.writeMesh( prim,
-                       npFaceVertexCount,
-                       npFaceVertexIndices,
-                       npPoints,
-                       npNormals,
-                       npTxcoords,
-                       timeCode,
-                       materialPrim,
-                       usdScene.xform_cache,
-                       args.subdivision,
-                       args.colordome,
-                     )
+        if not usdScene.meshes[ prim][ 'instance']:
+            bsa.writeMesh( prim,
+                        npFaceVertexCount,
+                        npFaceVertexIndices,
+                        npPoints,
+                        npNormals,
+                        npTxcoords,
+                        timeCode,
+                        materialPrim,
+                        usdScene.xform_cache,
+                        args.subdivision,
+                        args.colordome,
+                        )
+        else:
+            bsa.writeInstance( prim,
+                               usdScene.meshes[ prim][ 'instance']
+                             )
 
     ### LIGHTS 
     ###=======

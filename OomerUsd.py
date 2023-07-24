@@ -28,7 +28,7 @@ SOFTWARE.
 from pathlib import Path  # used for cross platform file paths
 
 ## third party modules
-from pxr import Usd, UsdGeom, UsdShade, UsdLux 
+from pxr import Usd, UsdGeom, UsdShade, UsdLux , Sdf
 import numpy as np
 
 ## oomer modules
@@ -67,6 +67,10 @@ class Reader:
         ### GLOBALS
         ###========
         self.copyright = False
+        self.blender = False
+        self.modo = False
+        self.houdini = False
+
         if self.stage.HasMetadata( 'metersPerUnit'):
             self.meters_per_unit = self.stage.GetMetadata( 'metersPerUnit')
         else:
@@ -90,8 +94,13 @@ class Reader:
             for customName in self.customLayerData.keys():
                 if customName == 'copyright':
                     self.copyright = self.customLayerData[ customName]
-        else:
-            self.end_timecode = 0
+        if self.stage.HasMetadata( 'doc'):
+            docString = self.stage.GetMetadata( 'doc')
+            print( docString)
+            if "Blender" in docString:
+                print( 'found Blender')
+        if self.stage.HasMetadata( 'defaultPrim'):
+            defaultPrim = self.stage.GetMetadata( 'defaultPrim')
 
         self.timecodes_per_second = self.stage.GetMetadata( 'timeCodesPerSecond')
         self.start_timecode = self.stage.GetMetadata( 'startTimeCode')
@@ -144,8 +153,9 @@ class Reader:
             if eachParent:
                 ### this seems Bella specific because of uuid storage, seems ok
                 if eachPrim.GetParent().GetName() == '/': # append to root list if this is a toplevel prim
-                    name = oomUtil.uuidSanitize( eachPrim.GetName(), _hashSeed = eachPrim.GetPath()) 
-                    self.root_prims.append( name)
+                    if eachPrim.GetName() != '_materials': ### TODO looks hackish,, is this standard to write materials under a prim with this name
+                        name = oomUtil.uuidSanitize( eachPrim.GetName(), _hashSeed = eachPrim.GetPath()) 
+                        self.root_prims.append( name)
 
             if eachPrim.HasAttribute( 'purpose'): # USD: render, ...
                 purpose = eachPrim.GetAttribute( 'purpose').Get()
@@ -170,8 +180,13 @@ class Reader:
                     # Dictionary map of xform prim to instance prim
                     self.prototype_instances[ eachPrim] =  self.resolveInstanceToPrim( eachPrim)
             if eachPrim.GetTypeName() == 'Mesh' and purpose == 'render':
+                usdGeom = UsdGeom.Mesh( eachPrim)
+                instancePrim = False
+                if eachPrim.HasAuthoredReferences(): ### Referencing is used for both local and file insatncing
+                    instancePrim = self.resolve_instance( eachPrim)
                 if filter_by_purpose == True and purpose == 'render' or filter_by_purpose == False:
                     self.meshes[ eachPrim ]  = {}
+                    self.meshes[ eachPrim][ 'instance'] = instancePrim
                     if materialPrim: self.meshes[ eachPrim][ 'material_prim'] = materialPrim
             # - [ ] Does this find prims without a purpose
             # - [ ] This traversal seems naive
@@ -306,6 +321,18 @@ class Reader:
                 if eachChildPrim.GetAttribute( 'purpose').Get() == 'render':
                     return eachChildPrim # Assumes never having more than one prim with render purpose
         return False
+
+    def resolve_instance(self, _prim ):
+        # The powerful layering system allowing usd to compose the scene from many sources
+        # leads to roundabout ways to find the prim that introduces a mesh
+        # There seems to be an instance method but Blender exports a <prepend references>
+        # References is also used for referencing external file.usda so seems overkill for a prim on the current stage
+        # UsdPrim.GetReferences() gets the references but I can't seem to list the original mesh
+        # so we must use the full power of the UsdPrimCompositionQuery to discover the original prim via the prim reference
+        compQuery = Usd.PrimCompositionQuery.GetDirectReferences( _prim)
+        compArc = compQuery.GetCompositionArcs()
+        sdfPath = compArc[0].GetTargetNode().GetPathAtIntroduction()
+        return self.stage.GetPrimAtPath( sdfPath)
 
     def triangulate_ngons( self, 
                            _faceVertexCounts,  # int[]

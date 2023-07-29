@@ -27,10 +27,11 @@ SOFTWARE.
 ## third party modules
 import numpy as np
 from pxr import Usd, Gf, UsdGeom, UsdShade, UsdLux 
-import re, json
 
 ## standard modules
 from pathlib import Path  # used for cross platform file paths
+import re, json
+import os.path 
 
 ## oomer modules
 import OomerUtil as oomUtil
@@ -44,6 +45,7 @@ class SceneAscii:
                 ):
         if not _bsaFile.parent.exists():
             _bsaFile.parent.mkdir()
+        self.bsaFile = _bsaFile
         self.file = open( str( _bsaFile), 'w')
         self.renderer_up_axis = 'Z'
         self.world_nodes = []
@@ -149,9 +151,9 @@ class SceneAscii:
                             ):
         #https://stackoverflow.com/questions/53820891/speed-of-writing-a-numpy-array-to-a-text-file
         #Assumed numpy.savetxt was performant, it is not! Saving 0020_060 Sprite fright went from 4 minutes to 1 minute
+        npArray = _nparray.ravel() # - [ ] doc
         self.file.write( self.nice( _name) + _type)
         self.file.write( _lbracket)
-        npArray = _nparray.ravel() # - [ ] doc
         npFormat = ' '.join([ '%g'] * npArray.size) #- [ ] document npFormat
         npFormat = '\n'.join([ npFormat])
         data = npFormat % tuple( npArray )
@@ -290,17 +292,17 @@ class SceneAscii:
                                  )
 
     def writeMesh( self, 
-                   _prim, 
-                   _npVertexCount,
-                   _npVertexIndices, 
-                   _npPoints, 
-                   _npNormals, 
-                   np_texcoords_vertex_buffer, 
-                   time_code,
-                   material_prim,
-                   xform_cache,
-                   subdivision,
-                   _colordome,
+                   _prim= False, 
+                   _usdScene = False, 
+                   _npVertexCount = False,
+                   _npVertexIndices = False, 
+                   _npPoints = False, 
+                   _npNormals = False, 
+                   _npTxcoords = False, 
+                   _materialPrim = False,
+                   _xformCache = False,
+                   _subdivision = False,
+                   _colordome = False,
                   ):
         # Along with a mesh, this function inserts an xform node to
         # 1. capture usd's gprim's ability to hold a transfrom
@@ -309,15 +311,27 @@ class SceneAscii:
 
         if _colordome: self.colorDome=True
 
-        ####type_name = usd_prim.GetTypeName()
         primName = _prim.GetName()
+        #print(primName)
         uuid = oomUtil.uuidSanitize( _prim.GetName(), _hashSeed = _prim.GetPath())
-        if material_prim:
-            material_name = oomUtil.uuidSanitize( material_prim.GetName(), _hashSeed = material_prim.GetPath())
-        else:
-            material_name = "None"
 
-        np_matrix4 = np.array( xform_cache.GetLocalTransformation( _prim)[0])
+        usdGeom = UsdGeom.Imageable(_prim)
+        primPurpose = usdGeom.ComputePurpose()
+        primVisibility = usdGeom.GetVisibilityAttr().Get()
+        if primPurpose != 'default' and primPurpose != 'render':
+        #if primPurpose != 'default' and primPurpose != 'render' and primVisibility != 'invisible':
+            return # Skip write mesh if proxy
+
+        ### 2024 material binding
+        materialBinding =  _prim.GetRelationship('material:binding')
+        matPrim = False
+        if materialBinding.GetTargets():
+            materialSdfPath = materialBinding.GetTargets()[ 0]
+            matPrim = _usdScene.stage.GetPrimAtPath( materialSdfPath)
+            if matPrim: ### if null then this material may be deactivated
+                materialName = oomUtil.uuidSanitize( matPrim.GetName(), _hashSeed = matPrim.GetPath())
+
+        np_matrix4 = np.array( _xformCache.GetLocalTransformation( _prim)[0])
         # INSERT XFORM 
         # the name of xform should be the same as usd gprim
         # this way the GetChildren() query done anywhere will be correct
@@ -335,10 +349,17 @@ class SceneAscii:
                                    _nparray = np_matrix4_1d,
                                    _rbracket = ')',
                                  )
-        if material_name != 'None':
+        if primVisibility == 'invisible':
+            self.writeNodeAttrib( _name = 'visibility', _value = '"hidden"')
+        ###if material_name != 'None':
+        ###    self.writeNodeAttrib( _name = 'material',       
+        ###                        _value = material_name,
+        ###                        )
+        if matPrim:
             self.writeNodeAttrib( _name = 'material',       
-                                _value = material_name,
+                                _value = materialName,
                                 )
+
 
         self.writeNode( _type = 'mesh', _uuid = uuid)
         self.writeNodeAttrib( _name = 'name', _value = '"' + primName + '"')
@@ -357,19 +378,21 @@ class SceneAscii:
                                    _type = 'vec3f[' + str( len( _npNormals)) + ']',
                                    _nparray = _npNormals,
                                  )
+        if primVisibility == 'invisible':
+            self.writeNodeAttrib( _name = 'visibility', _value = '"hidden"')
        
         try:
-            if isinstance( np_texcoords_vertex_buffer, np.ndarray): # fail on non np.ndarray
+            if isinstance( _npTxcoords, np.ndarray): # fail on non np.ndarray
                 self.writeNodeAttribNumpy( _name = 'steps[0].uvs',
-                                           _type = 'vec2f[' + str( np_texcoords_vertex_buffer.shape[0] ) + ']',
-                                           _nparray=np_texcoords_vertex_buffer,
+                                           _type = 'vec2f[' + str( _npTxcoords.shape[0] ) + ']',
+                                           _nparray=_npTxcoords,
                                          )
         except:
             if self.debug: print( 'FAIL writeMesh()', uuid)
 
-        if subdivision > 0:
+        if _subdivision > 0:
             self.writeNodeAttrib(  _name = 'subdivision.level',       
-                                   _value = str( subdivision)+'u',
+                                   _value = str( _subdivision)+'u',
                                 )
 
         ### Bella flag to skip mesh optimization 
@@ -397,6 +420,26 @@ class SceneAscii:
                                    _rbracket = ')',
                                  )
 
+    def writePointInstance(  self,
+                             _prim = False,
+                             _instancers = False, 
+                     ):
+        print( _prim)
+        multMat4 = np.array(_instancers)
+        primName = _prim.GetName() 
+        name = oomUtil.uuidSanitize( primName, _hashSeed = _prim.GetPath()) 
+        self.writeNode( _type = 'instancer', _uuid = name)
+        self.writeNodeAttrib( _name = 'name',
+                              _value = '"' + primName + '"',
+                            )
+        #self.writeNodeAttrib( _name = 'children[*]', _value = instanceName)
+        self.writeNodeAttribNumpy( _name = 'steps[0].instances',
+                                   _type = 'mat4f[' + str( len( multMat4)) +  ']',
+                                   _nparray = multMat4.ravel(),
+                                   _lbracket = '{',
+                                   _rbracket = '}',
+                                 )
+
     #2024 refactored
     # - [ ] USD mesh nodes have an optional xform attribute, Bella mesh nodes don't
     # - [ ] is time code even needed
@@ -404,8 +447,93 @@ class SceneAscii:
                     _prim = False, 
                     _usdScene = False,
                     _timeCode = 1,
+                    _hasAuthoredReferences = False,
+                    _instanceUUID = False,
+                  ):
+        '''
+        if _hasAuthoredReferences:
+            ref = _prim.GetReferences()
+            print('ref', ref , _prim.IsInstance())
+        '''
+        if _prim.IsInstance():
+            protoPrim =  _prim.GetPrototype().GetChildren()
+        
+        # Workaround to get useful name from Animal Logic prototype
+        primName = _prim.GetName() # no wackiness here
+        primVisibility = UsdGeom.Imageable( _prim).GetVisibilityAttr().Get()
+        alusd_name = False 
+        if _prim in _usdScene.prototype_children: # Spelunk and try to find useful name  
+            alusd_name = _prim.GetAttribute( 'alusd_originalName').Get() # [ ] GetName() gives us a useless "GEO" name, original name much more relevant
+            if isinstance( alusd_name, str): prim_name = alusd_name  
+        name = oomUtil.uuidSanitize( primName, _hashSeed = _prim.GetPath()) 
+
+
+        self.stage.xform_cache.SetTime( _timeCode)  ### Set xform cache to animation time
+        np_matrix4 = np.array( self.stage.xform_cache.GetLocalTransformation( _prim)[0]) #flatten transforms to mat4
+
+        self.writeNode( _type = 'xform', _uuid = name)
+        self.writeNodeAttrib( _name = 'name',
+                              _value = '"' + primName + '"',
+                            )
+
+        # - [2024] document prototypes and test 
+        # - add unit tests
+        if _prim in _usdScene.prototype_instances: 
+            # handler for top level prototype prims, ie the NS:GEO node in Animal Logic Assets
+            ### start rewriting this because it is before my understanding of UsdGeom and UsdShader
+            childPrim = _usdScene.prototype_instances[ _prim]
+            if childPrim:
+                alusd_name = childPrim.GetAttribute( 'alusd_originalName').Get()
+                if isinstance( alusd_name, str):
+                    childName = oomUtil.uuidSanitize( alusd_name, _hashSeed = childPrim.GetPath())
+                else:
+                    childName = oomUtil.uuidSanitize( childPrim.GetName())
+                self.writeNodeAttrib( _name = 'children[*]',
+                                      _value = childName,
+                                    )
+
+        else:  # normal workflow, including children of toplevel prototype prims
+            for childPrim in _prim.GetChildren():
+                childName = oomUtil.uuidSanitize( childPrim.GetName(), _hashSeed = childPrim.GetPath())
+                if childPrim in _usdScene.meshes: # is mesh?
+                    #if not _usdScene.meshes[ childPrim][ 'isInvisible']: ### filter out invisible
+                    #    ### Usd uses a prototype hierarchy  and tags it as invisible
+                    #    ### because of our naive traversal of the stage, these prims get attached to the visible scenegraph in Bella
+                    #    ### therefore we need to exclude them at some point
+                    #    ### my current call is to prune them from the list of children
+                    self.writeNodeAttrib( _name = 'children[*]', _value = childName)
+                else: # add non mesh child
+                    self.writeNodeAttrib( _name = 'children[*]', _value = childName)
+        if _instanceUUID:
+            self.writeNodeAttrib( _name = 'children[*]', _value = _instanceUUID)
+
+        #if usd_matrix4:
+        # usd stores matrix in row major order
+        # numpy scipy does column major order
+        # transform3d
+        # ax, ay, az = pokadot_transform3d.mat2euler(np_matrix4[:3, 0:3]) # convert rotation matrix portion to euler
+        # rotate_mxs = Cvector(math.degrees(ax), math.degrees(ay), math.degrees(az))
+        # reshape [(a1 b1 c1 d1),(a2 b2 c2 d2)] to [(a1 b1 c1 d1 a2 b2 c2 d2)] for np.savetxt
+        #np_matrix4_1d = np_matrix4.flatten()  # 1-D array copy of elements of array in row-major order
+        np_matrix4_1d = np_matrix4.ravel()  # 1-D array copy of elements of array in row-major order
+        self.writeNodeAttribNumpy( _name = 'steps[0].xform',
+                                   _type = 'mat4',
+                                   _nparray = np_matrix4_1d,
+                                   _lbracket = '(',
+                                   _rbracket = ')',
+                                 )
+    def writeScope( self, 
+                    _prim = False, 
+                    _usdScene = False,
+                    _timeCode = 1,
                   ):
         
+        materialBinding =  _prim.GetRelationship('material:binding')
+        if materialBinding.GetTargets():
+            materialSdfPath = materialBinding.GetTargets()[ 0]
+            materialPrim = _usdScene.stage.GetPrimAtPath( materialSdfPath)
+            if materialPrim: ### if null then this material may be deactivated
+                print('mat', materialSdfPath, type( materialSdfPath), materialPrim)
         # Workaround to get useful name from Animal Logic prototype
         primName = _prim.GetName() # no wackiness here
         alusd_name = False 
@@ -456,7 +584,7 @@ class SceneAscii:
         np_matrix4_1d = np_matrix4.ravel()  # 1-D array copy of elements of array in row-major order
         self.writeNodeAttribNumpy( _name = 'steps[0].xform',
                                    _type = 'mat4',
-                                   _nparray = np_matrix4_1d,
+                                   _nparray = np.array( [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]], dtype='float64'),
                                    _lbracket = '(',
                                    _rbracket = ')',
                                  )
@@ -547,10 +675,11 @@ class SceneAscii:
                           _filePath,
                         ):
         uuid = oomUtil.uuidSanitize( _usdShader.GetPrim().GetName(), _hashSeed = _usdShader.GetPath())
+        relPath = Path( os.path.relpath( _filePath, self.bsaFile.parent))
         self.writeNode( _type='fileTexture', _uuid = uuid)
-        self.file.write( self.nice('dir')  + '"' + str( _filePath.parent)+'";\n')
-        self.file.write( self.nice('ext')  + '"' + str( _filePath.suffix) +'";\n')
-        self.file.write( self.nice('file') + '"' + str( _filePath.stem) +'";\n')
+        self.file.write( self.nice('dir')  + '"' + str( relPath.parent)+'";\n')
+        self.file.write( self.nice('ext')  + '"' + str( relPath.suffix) +'";\n')
+        self.file.write( self.nice('file') + '"' + str( relPath.stem) +'";\n')
 
     def writeNormalTexture( self,
                             _prim,
@@ -648,17 +777,20 @@ class SceneAscii:
     def writeLight( self, 
                     _lightDict=False,
                     _timeCode=False,
+                    _usdScene=False,
                   ): 
         prim = _lightDict['UsdLux'].GetPrim()
         usdType = prim.GetTypeName()
         uuid = oomUtil.uuidSanitize( prim.GetName(), _hashSeed = prim.GetPath())
 
-        local_mat4 = False
+        local_mat4 = np.array( [[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]], dtype='float64') 
+        np_matrix4 = np.array( _usdScene.xform_cache.GetLocalTransformation( prim)[0])
         localXform = _lightDict['UsdLux'].GetLocalTransformation # TODO switch low level prim query to UsdLux query
         if prim.GetAttribute( 'xformOp:transform' ).HasValue():
             usd_matrix4 = prim.GetAttribute( 'xformOp:transform' ).Get( time = _timeCode)
-            local_mat4 = np.array( usd_matrix4, dtype='float64')  # convert to numpy for performance
-            local_mat4 = local_mat4 * self.stage.mat4_light
+            l_mat4 = np.array( usd_matrix4, dtype='float64')  # convert to numpy for performance
+            flipMat4 = np.array( [[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]], dtype='float64') 
+            local_mat4 = flipMat4 @ l_mat4
 
         # 
         if usdType == 'SphereLight':    bellaType = 'pointLight' 
@@ -680,14 +812,18 @@ class SceneAscii:
         self.writeNode( _type = 'xform', _uuid = uuid)
         self.writeNodeAttrib( _name = 'name', _value= '"' + uuid + '_flip"')
         uuid += '_l' # xform gets OG name, light gets _l name
-        flipMat4 = np.array( [[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]], dtype='float64')  
+        ### need to add xform mat stored on light
+        ###
+        ### flipMat4 = np.array( [[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]], dtype='float64')  
         self.writeNodeAttrib( _name = 'children[*]', _value = uuid)
         self.writeNodeAttribNumpy( _name='steps[0].xform',
                                    _type='mat4',
                                    _lbracket='(',
-                                   _nparray=flipMat4,
+                                   #_nparray=flipMat4,
+                                   _nparray = local_mat4,
                                    _rbracket=')',
                                  )
+        #print( uuid, local_mat4)
 
         self.writeNode( _type = bellaType, _uuid = uuid)
         self.writeNodeAttribNumpy( _name = 'color',

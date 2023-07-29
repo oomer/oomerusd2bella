@@ -133,7 +133,8 @@ for timeCode in range( startFrame, endFrame, 1):  # usd timecode starts on frame
     # - [ ] filter by purpose, USD allows for non renderable meshes, default for Bella to render ALL meshes
     # - [ ] I believe that prototype prims were birthed at origin
     # - [ ] document thsi better, not sure what False means
-    usdScene.traverseScene( filter_by_purpose=False)
+  #  usdScene.traverseScene( filter_by_purpose=False)
+    usdScene.traverseScene()
 
     ### MESH 
     ###=====
@@ -182,17 +183,17 @@ for timeCode in range( startFrame, endFrame, 1):  # usd timecode starts on frame
             materialPrim = usdScene.meshes[ prim][ 'material_prim'] 
         else: materialPrim = False
         if not usdScene.meshes[ prim][ 'instance']:
-            bsa.writeMesh( prim,
-                        npFaceVertexCount,
-                        npFaceVertexIndices,
-                        npPoints,
-                        npNormals,
-                        npTxcoords,
-                        timeCode,
-                        materialPrim,
-                        usdScene.xform_cache,
-                        args.subdivision,
-                        args.colordome,
+            bsa.writeMesh(  _prim = prim,
+                            _usdScene = usdScene,
+                            _npVertexCount = npFaceVertexCount,
+                            _npVertexIndices = npFaceVertexIndices,
+                            _npPoints = npPoints,
+                            _npNormals = npNormals,
+                            _npTxcoords = npTxcoords,
+                            _materialPrim = materialPrim,
+                            _xformCache = usdScene.xform_cache,
+                            _subdivision = args.subdivision,
+                            _colordome = args.colordome,
                         )
         else:
             bsa.writeInstance( prim,
@@ -204,7 +205,9 @@ for timeCode in range( startFrame, endFrame, 1):  # usd timecode starts on frame
     if not args.ignorelights:
         for prim in usdScene.lights.keys():
             bsa.writeLight( _lightDict = usdScene.lights[ prim], 
-                            _timeCode = timeCode)
+                            _timeCode = timeCode,
+                            _usdScene = usdScene,
+                          )
 
     ### CAMERA
     ###=======
@@ -219,7 +222,15 @@ for timeCode in range( startFrame, endFrame, 1):  # usd timecode starts on frame
         bsa.writeXform( _prim = prim,
                         _usdScene = usdScene,
                         _timeCode = timeCode,
+                        _hasAuthoredReferences = usdScene.xforms[ prim][ 'hasAuthoredReferences'],
+                        _instanceUUID = usdScene.xforms[ prim][ 'instanceUUID'],
                       )
+    for prim in usdScene.scopes.keys():
+        bsa.writeScope( _prim = prim,
+                        _usdScene = usdScene,
+                        _timeCode = timeCode,
+                      )
+
 
     ### USDPREVIEWSURFACE
     ###==================
@@ -238,6 +249,15 @@ for timeCode in range( startFrame, endFrame, 1):  # usd timecode starts on frame
                                 usdScene.uv_textures[ shader][ 'file'], 
                               )
 
+    for prim in usdScene.instancers.keys():
+        #mat4f[3]{1 0 0 0 0 1 0 0 0 0 1 0 0.1 0 0 1 1 0 0 0 0 1 0 0 0 0 1 0 0 0.1 0 1 1 0 0 0 0 1 0 0 0 0 1 0 -0.1 0 0 1};
+        #w = np.array(([[1,0,0,0],[0,1,0,0],[0,0,1,0],[0.1,0,0,1]],[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0.1,0,1]],[[1,0,0,0],[0,1,0,0],[0,0,1,0],[-0.1,0,0,1]]));
+        #print(w)
+        #print(np.array(usdScene.instancers[ptInstance]))
+        #print(np.array(usdScene.instancers[ptInstance]).ravel())
+        bsa.writePointInstance( _prim = prim,
+                                _instancers = usdScene.instancers[ prim], 
+                              )
     # not sure how I can tell that a file is used as a normalmap
     #for usd_prim in usdScene.uv_textures.keys(): # write out usd uv textures as bella file textures
     #    bsa.write_normal_texture(   usd_prim, 

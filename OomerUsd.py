@@ -26,9 +26,10 @@ SOFTWARE.
 
 ## standard modules
 from pathlib import Path  # used for cross platform file paths
+import os.path
 
 ## third party modules
-from pxr import Usd, UsdGeom, UsdShade, UsdLux , Sdf
+from pxr import Usd, UsdGeom, UsdShade, UsdLux , Sdf, Gf
 import numpy as np
 
 ## oomer modules
@@ -54,8 +55,11 @@ class Reader:
         self.meshes = {}
         self.lights = {}
         self.xforms = {}
+        self.instancers = {} ### point instancing
+        self.scopes = {} ### TODO is a scope a grouping method?
         self.cameras = {}
         self.previewSurfaces = {}
+        self.references = {}
         self.uv_textures = {}
         self.prototype_instances = {}
         self.prototype_children = []
@@ -94,6 +98,9 @@ class Reader:
             for customName in self.customLayerData.keys():
                 if customName == 'copyright':
                     self.copyright = self.customLayerData[ customName]
+                if customName == 'houdini':
+                    self.houdini = self.customLayerData[ customName]
+                    print( self.customLayerData[ customName])
         if self.stage.HasMetadata( 'doc'):
             docString = self.stage.GetMetadata( 'doc')
             print( docString)
@@ -124,195 +131,256 @@ class Reader:
         else:
             return attribute.Get()
 
-    # depth first search for prims convertable to bella
-    def traverseScene( self, filter_by_purpose=False ):
-        # - USD notes
-        # - UsdStage.traverse() filters out prototypes and possibly other prims
-        # - Usd.PrimRange allows custom traversal filter
 
-        rootPrim = self.stage.GetPseudoRoot() ### TODO doc GetPseudoRoot()
-        listPrims = list( Usd.PrimRange( rootPrim)) ### TODO doc PrimRange()
-        listPrototypePrims = [] 
-        usdPrototypes = self.stage.GetPrototypes() # prototypes contain a common hierarchy referenced by instances
-        for eachPrototype in usdPrototypes:
-            self.prototype_children = self.prototype_children + list( eachPrototype.GetChildren())
-            listPrototypePrims = listPrototypePrims + list( iter( Usd.PrimRange( eachPrototype)))
-        listAllPrims = listPrototypePrims + listPrims
+    ### rewrite of traverse_scene 2023
+    ### due to usd complexity, the naive earlier approach of using PrimRange to traverse all prims
+    ### leads to lack of inherited ( from parent or grandparent ) knowledge like kind, visibility, etc
+    ### by using IsPostVisit() we descend each branch and toggle on inheritable switches like visibility
+    ### stored in visitVisibility
+    def traverseScene ( self):
         ignorePrim = [] # bypass list for unwanted shaders and textures, ie proxy
-        
-        # ancestor state tracking
-        # TODO better documentation
-        purpose = False
-        ancestorPurpose = False
-        materialPrim = False
 
-        for eachPrim in listAllPrims:
-            # toplevel xform holds purpose and material
-            # context switcher carrying purpose and material to descendants
-            eachParent = eachPrim.GetParent()
-            if eachParent:
+        subtreeGroup      = False
+        subtreeComponent  = False
+        subtreeScope      = False
+        subtreePrototype  = False
+        subtreeInvisible  = False
+        postVisit         = False
+        primIter = iter(Usd.PrimRange.PreAndPostVisit(self.stage.GetPseudoRoot()))
+        subtreeCounter = 0
+
+        ancestInvisiblePrim = False
+        ancestGroupPrim     = False
+        usdPrototypes = self.stage.GetPrototypes() # prototypes contain a common hierarchy referenced by instances
+        ### currently instancer.hiplc creates BOTH a /hidden/sphere and a /Instances/Prototypes/hidden/sphere, the latter instance referencing to
+        ### the former, on top of this the actual instances point to the Prototype, which begs the question, why have two degrees of separation?
+        ### to be continued
+        for ea in usdPrototypes:
+            print(type(ea))
+            for t in  Usd.PrimRange(ea):
+                print( t)
+        for eachPrototype in usdPrototypes:
+            children = self.prototype_children + list( eachPrototype.GetChildren())
+            listPrototypePrims =  list( iter( Usd.PrimRange( eachPrototype)))
+            print(usdPrototypes,children,listPrototypePrims)
+
+        ### TODO unittest for fragile complex invisibility and group tracking system 
+        for prim in primIter:
+            primGeom    = UsdGeom.Mesh( prim)
+            primKind    = Usd.ModelAPI( prim).GetKind()
+            primPurpose = primGeom.GetPurposeAttr().Get()
+            #primPurpose = primGeom.ComputePurpose() ### compute may be expensive on large scenes, our stack based traversal method
+            # is appropriate to gather this info as we walk through each prim
+            primType    = prim.GetTypeName()
+            primName    = prim.GetName()
+            primUUID = oomUtil.uuidSanitize( prim.GetName(), _hashSeed = prim.GetPath()) 
+
+            if prim == self.stage.GetPseudoRoot(): 
+                subtreeCounter = 0
+            elif primIter.IsPostVisit(): 
+                subtreeCounter -= 1
+                postVisit = True
+            else: 
+                subtreeCounter += 1
+                postVisit = False
+
+            ### on PrimRange() post visit turn off ancestral flags
+            if prim == ancestInvisiblePrim: subtreeInvisible  = False
+            if prim == ancestGroupPrim:     subtreeGroup  = False
+
+            if not postVisit and not subtreeCounter == 0: ### a PrimRange() post visit is 2nd pass
+                ### Track ancestral flags 
+                if primGeom.GetVisibilityAttr().Get() == 'invisible' or primName == 'hidden': 
+                    if subtreeInvisible == False: # first discovered invis ancestor
+                        ancestInvisiblePrim = prim ### track ancestor prim
+                    subtreeInvisible = True ### subtree one time switch, assumption all children are invis
+                if primKind == 'group' or primName == 'hidden': 
+                    if subtreeGroup == False: # first discovered group ancestor
+                        ancestGroupPrim = prim ### track ancestor prim
+                    subtreeGroup = True ### subtree one time switch, assumption all children are in group
+
+                ### add toplevel to render list
+                eachParent = prim.GetParent()
                 ### this seems Bella specific because of uuid storage, seems ok
-                if eachPrim.GetParent().GetName() == '/': # append to root list if this is a toplevel prim
-                    if eachPrim.GetName() != '_materials': ### TODO looks hackish,, is this standard to write materials under a prim with this name
-                        name = oomUtil.uuidSanitize( eachPrim.GetName(), _hashSeed = eachPrim.GetPath()) 
-                        self.root_prims.append( name)
+                if eachParent.GetName() == '/' and not subtreeInvisible: # append to root list if this is a toplevel prim
+                #if eachParent.GetName() == '/':
+                    print(primUUID)
+                    self.root_prims.append( primUUID)
 
-            if eachPrim.HasAttribute( 'purpose'): # USD: render, ...
-                purpose = eachPrim.GetAttribute( 'purpose').Get()
-            #p1 = UsdShade.MaterialBindingAPI(usd_prim).DirectBinding().Get()
-            #p2 = dir(UsdShade.MaterialBindingAPI(usd_prim))
+                #print( subtreeCounter, 'group:', subtreeGroup, 'invisible:', subtreeInvisible, subtreeCounter, 'purpose:', primPurpose, prim.GetPrimPath())
+                #print( subtreeCounter, 'purpose:', primPurpose, prim.GetPrimPath(), 'ins', prim.IsInstanceable(), prim.IsInstance())
 
-            if eachPrim.HasRelationship( 'material:binding'): # [ ] doesn't seem efficient
-                materialRelationship = eachPrim.GetRelationship( 'material:binding')
-                materialSdfPath = materialRelationship.GetTargets()[0]
-                materialPrim = self.stage.GetPrimAtPath( materialSdfPath)
+                ### Usd xform seems to be the 
+                if primType == 'Xform' or primType == 'Scope':
+                    hasAuthoredReferences = prim.HasAuthoredReferences()
+                    self.xforms[ prim ]  = {}
+                    self.xforms[ prim]['hasAuthoredReferences'] = hasAuthoredReferences
+                    self.xforms[ prim]['isInvisible'] = subtreeInvisible
+                    self.xforms[ prim]['instanceUUID'] = False
 
-            if purpose == 'default': purpose = ancestorPurpose # [ ] default really means always on
-            if purpose == None: purpose = ancestorPurpose # [ ] assume that missing purpose is a DCC output failure
-            if purpose == 'proxy': purpose=False # [ ] use Boolean False rather than store string
-            ancestorPurpose = purpose 
+                    if prim.IsInstance():
+                        # Dictionary map of xform prim to instance prim
+                        #print( self.resolve_instance( prim))
+                        #self.prototype_instances[ prim] =  self.resolveInstanceToPrim( prim)
+                        instancePrim = self.resolve_instance( prim)
+                        instanceUUID = oomUtil.uuidSanitize( instancePrim.GetName(), _hashSeed = instancePrim.GetPath()) 
+                        self.xforms[ prim]['instanceUUID'] = instanceUUID
+                        self.prototype_instances[ prim] =  self.resolve_instance( prim)
+                ### 
+                if primType == 'Mesh':
+                    instancePrim = False
+                    if prim.HasAuthoredReferences(): ### Referencing is used for both local and file insatncing
+                        instancePrim = self.resolve_instance( prim)
 
-            if filter_by_purpose == False: purpose = 'render' # force render purpose on all prims
+                    self.meshes[ prim ]  = {}
+                    self.meshes[ prim][ 'instance'] = instancePrim
+                    self.meshes[ prim][ 'isInvisible'] = subtreeInvisible
+                    #if materialPrim: self.meshes[ prim][ 'material_prim'] = materialPrim
 
-            if eachPrim.GetTypeName() == 'Xform':
-                self.xforms[ eachPrim ]  = {}
-                if eachPrim.IsInstance():
-                    # Dictionary map of xform prim to instance prim
-                    self.prototype_instances[ eachPrim] =  self.resolveInstanceToPrim( eachPrim)
-            if eachPrim.GetTypeName() == 'Mesh' and purpose == 'render':
-                usdGeom = UsdGeom.Mesh( eachPrim)
-                instancePrim = False
-                if eachPrim.HasAuthoredReferences(): ### Referencing is used for both local and file insatncing
-                    instancePrim = self.resolve_instance( eachPrim)
-                if filter_by_purpose == True and purpose == 'render' or filter_by_purpose == False:
-                    self.meshes[ eachPrim ]  = {}
-                    self.meshes[ eachPrim][ 'instance'] = instancePrim
-                    if materialPrim: self.meshes[ eachPrim][ 'material_prim'] = materialPrim
-            # - [ ] Does this find prims without a purpose
-            # - [ ] This traversal seems naive
-            if filter_by_purpose == True and purpose == False:
-                # traverse materials under proxy mesh and add to ignore_prim
-                # - [ ] document why I ignore these ones, related to Animal Logic usdlab methinks
-                for eachRelationship in eachPrim.GetRelationships():
-                    if 'material:binding' in eachRelationship.GetName(): # have seen both material:binding and material:binding:preview used
-                        materialSdfPath = eachRelationship.GetTargets()[ 0]
-                        materialPrim = self.stage.GetPrimAtPath( materialSdfPath)
-                        if self.debug: print( 'IGNORING', materialPrim)
-                        ignorePrim.append( materialPrim)
+                # - [ ] Treat UsdPreviewSurface as a equivalent to a Bella PBR material
+                if primType == 'Material' and prim not in ignorePrim: 
+                    self.previewSurfaces[ prim] = {} # [ ] one UsdPreviewSurface becomes 1 bella quickMaterial
+                    # A material probably holds a unique surface shader and then instances of UsdUVTextures
+                    # to ingest the material, we populate 
 
-            # - [ ] Treat UsdPreviewSurface as a equivalent to a Bella PBR material
-            if eachPrim.GetTypeName() == 'Material' and eachPrim not in ignorePrim and 'proxy' not in eachPrim.GetName(): # filter out proxy materials
-                self.previewSurfaces[ eachPrim] = {} # [ ] one UsdPreviewSurface becomes 1 bella quickMaterial
-                # A material probably holds a unique surface shader and then instances of UsdUVTextures
-                # to ingest the material, we populate 
-
-                # Once a Material prim is found, we kinda mass haul-in all file textures
-                # Could do a proper traversal of actually used shader connections instead
-                # to avoid proxy textures
-                # - [ ] document what PrimRange does
-                for shaderNetworkPrim in Usd.PrimRange( eachPrim): ## ( subtree traversal depth first), it this the same as gathering all the nodes of a shader network
-                    usdShader = UsdShade.Shader( shaderNetworkPrim)
-                    idAttr = usdShader.GetIdAttr()
-                    if idAttr:
-                        infoId = idAttr.Get()
+                    # Once a Material prim is found, we kinda mass haul-in all file textures
+                    # Could do a proper traversal of actually used shader connections instead
+                    # to avoid proxy textures
+                    ### PrimRange will traverse tree starting at prim and descending all children subtrees
+                    ### 
+                    for shaderNetworkPrim in Usd.PrimRange( prim): ## ( subtree traversal depth first), it this the same as gathering all the nodes of a shader network
                         usdShader = UsdShade.Shader( shaderNetworkPrim)
+                        idAttr = usdShader.GetIdAttr()
+                        if idAttr:
+                            infoId = idAttr.Get()
+                            usdShader = UsdShade.Shader( shaderNetworkPrim)
 
-                        if infoId == 'UsdPreviewSurface':
-                            self.previewSurfaces[ eachPrim][ 'shader'] = shaderNetworkPrim # TODO is 'shader' referenced
-                            # - [ ] when a diffuseColor is found, this is good enough to claim
-                            # - [ ] this prim can be converted to a PBR material
-                            # _input.GetConnections()[0] # - [x] why more than one, in a node architecture, each attribute is designed to allow more than one input although max is usually one
-                            # - [ 2024 ] a rich node based architecture allows lots of diff type of inputs from procedurals to files to constants
-                            # - [ 2024 ] right now I am assuming the use of inputs:file rather than say a checkerboard procedural
-                            # - [ 2024 ] when I embark on MaterialX, these assumptions will be revisited
-                            for shaderAttributeName in self.usdPreviewSurface.keys(): # loop over this dictionary mapping usdpreviewsurface to bella uber
-                                shaderAttribute = usdShader.GetInput( shaderAttributeName)
-                                if shaderAttribute and shaderAttributeName != 'normal':
-                                    attribValue = shaderAttribute.Get()
-                                    connectedPrimTuple = shaderAttribute.GetConnectedSource()
-                                    if connectedPrimTuple: # Is input connected to another node
-                                        connectableAPI = connectedPrimTuple[0]
-                                        shaderPrim = UsdShade.Shader( connectableAPI.GetPrim())
-                                        infoId2 = shaderPrim.GetIdAttr().Get()
-                                        if infoId2 == 'UsdUVTexture':
-                                            ### file paths are relative to .usd file where they are defined
-                                            ### ./main.usd
-                                            ### ./textureDir/cat.png
-                                            ### ./geomDir/cat.usd
-                                            # -- ./geomdir/cat.usd is referenced is ./main.usd
-                                            # -- cat.usd uses texture with a locator string "../textureDir/cat.png"
-                                            # -- during scene composition, all prims appear under one scenegraph
-                                            # -- but "../textureDir/cat.png" 
-                                            #maybe flattewn
+                            if infoId == 'UsdPreviewSurface':
+                                self.previewSurfaces[ prim][ 'shader'] = shaderNetworkPrim # TODO is 'shader' referenced
+                                # - [ ] when a diffuseColor is found, this is good enough to claim
+                                # - [ ] this prim can be converted to a PBR material
+                                # _input.GetConnections()[0] # - [x] why more than one, in a node architecture, each attribute is designed to allow more than one input although max is usually one
+                                # - [ 2024 ] a rich node based architecture allows lots of diff type of inputs from procedurals to files to constants
+                                # - [ 2024 ] right now I am assuming the use of inputs:file rather than say a checkerboard procedural
+                                # - [ 2024 ] when I embark on MaterialX, these assumptions will be revisited
+                                for shaderAttributeName in self.usdPreviewSurface.keys(): # loop over this dictionary mapping usdpreviewsurface to bella uber
+                                    shaderAttribute = usdShader.GetInput( shaderAttributeName)
+                                    if shaderAttribute and shaderAttributeName != 'normal':
+                                        attribValue = shaderAttribute.Get()
+                                        connectedPrimTuple = shaderAttribute.GetConnectedSource()
+                                        if connectedPrimTuple: # Is input connected to another node
+                                            connectableAPI = connectedPrimTuple[0]
+                                            shaderPrim = UsdShade.Shader( connectableAPI.GetPrim())
+                                            infoId2 = shaderPrim.GetIdAttr().Get()
+                                            if infoId2 == 'UsdUVTexture':
+                                                ### file paths are relative to .usd file where they are defined
+                                                ### ./main.usd
+                                                ### ./textureDir/cat.png
+                                                ### ./geomDir/cat.usd
+                                                # -- ./geomdir/cat.usd is referenced is ./main.usd
+                                                # -- cat.usd uses texture with a locator string "../textureDir/cat.png"
+                                                # -- during scene composition, all prims appear under one scenegraph
+                                                # -- but "../textureDir/cat.png" 
+                                                #maybe flattewn
 
-                                            ### This is how NOT to get an attrib
-                                            ### file = Usd.Prim.GetAttribute( each.GetAttribute( 'inputs:file'))
-                                            ### this gets a raw string and is inappropriate because we need
-                                            ### sdfAssetPath.resolvedPath because the raw string will either be relative OR absolute
+                                                ### This is how NOT to get an attrib
+                                                ### file = Usd.Prim.GetAttribute( each.GetAttribute( 'inputs:file'))
+                                                ### this gets a raw string and is inappropriate because we need
+                                                ### sdfAssetPath.resolvedPath because the raw string will either be relative OR absolute
 
-                                            sdfAssetPath = shaderPrim.GetInput( 'file').Get() ### shader <- input <- sdfAssetPath
-                                            absFilePath = sdfAssetPath.resolvedPath ### total API confusion, this attrib not documented, got by trying to use GetResolvedPath() and API suggested resolvedPath
-                                            relFilePath = sdfAssetPath.path
-                                            ### My newbie c++ brain finally figured out that .path and .resolvedPath
-                                            ### SDF_API SdfAssetPath ( const std::string & 	path,
-                                            ###                        const std::string & 	resolvedPath 
-                                            ###                      )	
-                                            if (self.file.parent != Path( absFilePath)): ### Use relative path unless in same dir
-                                                file = Path( absFilePath).relative_to( self.file.parent.resolve()) ### calculate texture relative to -usdfile path
-                                            else:
-                                                file = Path( relFilePath)
-                                            sourceColorSpace = usdShader.GetInput( 'sourceColorSpace').Get()
-                                            wrapS = shaderPrim.GetInput( 'wrapS').Get()
-                                            wrapT = shaderPrim.GetInput( 'wrapT').Get()
-                                            self.uv_textures[ shaderPrim] = {} # [ ] one UsdUvTexture becomes 1 bella fileTexture
-                                            self.uv_textures[ shaderPrim][ 'file'] = file
-                                            self.uv_textures[ shaderPrim][ 'wrapS'] = wrapS
-                                            self.uv_textures[ shaderPrim][ 'wrapT'] = wrapT
-                                            self.uv_textures[ shaderPrim][ '_bellatype'] = 'fileTexture'
-                                        #if infoId == 'UsdPrimvarReader_float2':
-                                        #    print( 'hello', usdShade3.GetInput('varname').Get())
-                                        self.previewSurfaces[ eachPrim][ shaderAttributeName] = shaderPrim
-                                    else: # store local value
-                                        self.previewSurfaces[ eachPrim][ shaderAttributeName] = attribValue
+                                                sdfAssetPath = shaderPrim.GetInput( 'file').Get() ### shader <- input <- sdfAssetPath
+                                                absFilePath = sdfAssetPath.resolvedPath ### total API confusion, this attrib not documented, got by trying to use GetResolvedPath() and API suggested resolvedPath
+                                                relFilePath = sdfAssetPath.path
+                                                ### My newbie c++ brain finally figured out that .path and .resolvedPath
+                                                ### SDF_API SdfAssetPath ( const std::string & 	path,
+                                                ###                        const std::string & 	resolvedPath 
+                                                ###                      )	
+                                                if (self.file.parent != Path( absFilePath)): ### Use relative path unless in same dir
+                                                    ### pathlib relative_to files
+                                                    ### ValueError: '/Users/harvey/oomerusd2bella/tv_retro/0/tv_retro_body_bc.png' is not in the subpath of '/Users/harvey/oomerusd2bella/houdini' OR one path is relative and the other is absolute. 
+                                                    #file = Path(os.path.relpath( absFilePath, self.file.parent.resolve()))
+                                                    file = Path( absFilePath)
+                                                    #file = Path( absFilePath).relative_to( self.file.parent.resolve()) ### calculate texture relative to -usdfile path
+                                                else:
+                                                    file = Path( relFilePath)
+                                                sourceColorSpace = usdShader.GetInput( 'sourceColorSpace').Get()
+                                                wrapS = shaderPrim.GetInput( 'wrapS').Get()
+                                                wrapT = shaderPrim.GetInput( 'wrapT').Get()
+                                                self.uv_textures[ shaderPrim] = {} # [ ] one UsdUvTexture becomes 1 bella fileTexture
+                                                self.uv_textures[ shaderPrim][ 'file'] = file
+                                                self.uv_textures[ shaderPrim][ 'wrapS'] = wrapS
+                                                self.uv_textures[ shaderPrim][ 'wrapT'] = wrapT
+                                                self.uv_textures[ shaderPrim][ '_bellatype'] = 'fileTexture'
+                                            #if infoId == 'UsdPrimvarReader_float2':
+                                            #    print( 'hello', usdShade3.GetInput('varname').Get())
+                                            self.previewSurfaces[ prim][ shaderAttributeName] = shaderPrim
+                                        else: # store local value
+                                            self.previewSurfaces[ prim][ shaderAttributeName] = attribValue
 
-            if eachPrim.GetTypeName() == 'Camera':
-                self.cameras[ eachPrim]  = {}
+                if primType == 'Camera':
+                    self.cameras[ prim]  = {}
 
-            if eachPrim.GetTypeName() == 'SphereLight':
-                self.lights[ eachPrim] = {}
-                lightPrim = UsdLux.SphereLight( eachPrim)
-                self.lights[ eachPrim][ 'UsdLux'] = lightPrim
+                if primType == 'SphereLight':
+                    self.lights[ prim] = {}
+                    lightPrim = UsdLux.SphereLight( prim)
+                    self.lights[ prim][ 'UsdLux'] = lightPrim
 
-            ### DistantLight
-            if eachPrim.GetTypeName() == 'DistantLight':
-                self.lights[ eachPrim] = {}
-                lightPrim = UsdLux.DistantLight( eachPrim)
-                self.lights[ eachPrim][ 'UsdLux'] = lightPrim
-                self.lights[ eachPrim][ 'angle']  = lightPrim.GetAngleAttr().Get()
-            ### Arealight
-            if eachPrim.GetTypeName() == 'RectLight':
-                self.lights[ eachPrim ] = {}
-                lightPrim = UsdLux.RectLight( eachPrim)
-                self.lights[ eachPrim][ 'UsdLux'] = lightPrim
-                self.lights[ eachPrim][ 'width']  = lightPrim.GetWidthAttr().Get()
-                self.lights[ eachPrim][ 'height'] = lightPrim.GetHeightAttr().Get()
-                self.lights[ eachPrim][ 'texture'] = lightPrim.GetTextureFileAttr().Get()
-            ### AreaLight 
-            if eachPrim.GetTypeName() == 'DiskLight':
-                self.lights[ eachPrim] = {}
-                lightPrim = UsdLux.DiskLight( eachPrim)
-                self.lights[ eachPrim][ 'UsdLux'] = lightPrim
-                self.lights[ eachPrim][ 'radius'] = lightPrim.GetRadiusAttr().Get()
-                 
-            # Spotlight
-            if eachPrim.GetTypeName() == 'SpotLight':
-                self.lights[ eachPrim ] = {}
-                self.lights[ eachPrim][ 'UsdLux'] = False
-            # Domelight            
-            if eachPrim.GetTypeName() == 'DomeLight':
-                self.lights[ eachPrim ] = {}
-                self.lights[ eachPrim][ 'UsdLux'] = lightPrim
-                self.lights[ eachPrim][ 'texture'] = lightPrim.GetTextureFileAttr().Get()
+                ### DistantLight
+                if primType == 'DistantLight':
+                    self.lights[ prim] = {}
+                    lightPrim = UsdLux.DistantLight( prim)
+                    self.lights[ prim][ 'UsdLux'] = lightPrim
+                    self.lights[ prim][ 'angle']  = lightPrim.GetAngleAttr().Get()
+                ### Arealight
+                if primType == 'RectLight':
+                    self.lights[ prim ] = {}
+                    lightPrim = UsdLux.RectLight( prim)
+                    self.lights[ prim][ 'UsdLux']   = lightPrim
+                    self.lights[ prim][ 'width']    = lightPrim.GetWidthAttr().Get()
+                    self.lights[ prim][ 'height']   = lightPrim.GetHeightAttr().Get()
+                    self.lights[ prim][ 'texture']  = lightPrim.GetTextureFileAttr().Get()
+                ### AreaLight 
+                if primType == 'DiskLight':
+                    self.lights[ prim] = {}
+                    lightPrim = UsdLux.DiskLight( prim)
+                    self.lights[ prim][ 'UsdLux'] = lightPrim
+                    self.lights[ prim][ 'radius'] = lightPrim.GetRadiusAttr().Get()
+                    
+                # Spotlight
+                if primType == 'SpotLight':
+                    self.lights[ prim ] = {}
+                    self.lights[ prim][ 'UsdLux'] = False
+                # Domelight            
+                if primType == 'DomeLight':
+                    self.lights[ prim ] = {}
+                    self.lights[ prim][ 'UsdLux'] = lightPrim
+                    self.lights[ prim][ 'texture'] = lightPrim.GetTextureFileAttr().Get()
+                if primType == 'PointInstancer':
+                    ### loop point instances
+                    ### - [ ] separate out each prototype index
+                    ### - [ ] merge Usd's quat, point, scale into 4x4 matrix
+                    ### - [ ] store 4x4 matrix per protoIndex
+                    ### rationale behind Usd's decision to separate out orientation, translation and scale
+                    ### is saving of memory when dealing with billions of instances, Bella only uses mat4f
+                    listMat4 = []
+                    primPointInstancer = UsdGeom.PointInstancer( prim)
+                    orientationBuf = primPointInstancer.GetOrientationsAttr().Get()
+                    positionBuf = primPointInstancer.GetPositionsAttr().Get()
+                    scaleBuf = primPointInstancer.GetScalesAttr().Get()
+                    for pointNum in range(len( orientationBuf)): 
+                        quatOrient = orientationBuf[pointNum]
+                        quatf = Gf.Quatf( quatOrient) ### quatOrient is stored half precision 
+                        pos = positionBuf[pointNum]
+                        scale = scaleBuf[pointNum]
+
+                        ### buildup matrix
+                        scaleMat4 = Gf.Matrix4f() 
+                        scaleMat4.SetScale( scale) ### merge 
+                        rot = Gf.Rotation( quatOrient) ### quatOrient is stored half precision 
+                        mat4a = Gf.Matrix4f() 
+                        rotPosMat = mat4a.SetTransform( rot, pos)
+                        listMat4.append( scaleMat4 * rotPosMat) ### apply sclae
+                    self.instancers[ prim] = listMat4
 
     def resolveInstanceToPrim( self, _prim): # hardcoded to ALUSD
         usdPrototype= _prim.GetPrototype() # Animal Logic Alab.usd  should return GEO GEOPROXY Material
@@ -477,6 +545,16 @@ class Reader:
                             dynTxcoordString = matPrim2.GetAttribute(sdfPath2.name).Get() ### UsdPrim.GetAttribute(  ) 
                         else: # local value stored on input
                             dynTxcoordString = usdShadeInput.Get()
+
+            ### 2024 material binding
+            materialBinding =  _prim.GetRelationship('material:binding')
+            if materialBinding.GetTargets():
+                materialSdfPath = materialBinding.GetTargets()[ 0]
+                materialPrim = self.stage.GetPrimAtPath( materialSdfPath)
+                if materialPrim: ### if null then this material may be deactivated
+                    #print('uuumat', materialSdfPath, type( materialSdfPath), materialPrim)
+                    foo = 1
+
 
         ### Look for txccords with explicit indices
         explicitTxcoordIndices = False  

@@ -26,7 +26,7 @@ SOFTWARE.
 
 # third party modules
 import numpy as np
-from pxr import Usd, Tf
+from pxr import Usd, Tf, Sdf
 
 # oomer modules
 import OomerUsd     as oomUsd   # USD read routines
@@ -39,6 +39,15 @@ class Test:
         self.usdScene = oomUsd.Reader( _usdFile = 'unittest.usda', 
                                        _unitTest = True,
                                      )
+    ### Create in memory usd stage from string
+    ### allows the encapsulation of usda snippets without external files
+    def createInlineUsdStage( self,  
+                              _bigString = False,
+                            ):
+        sdfLayer = Sdf.Layer.CreateAnonymous( 'tempsdf')
+        sdfLayer.ImportFromString( '#sdf 1.4.32' + _bigString)
+        usdStage = Usd.Stage.CreateInMemory( 'tempusd', sdfLayer)
+        return usdStage
 
     # Test single ngon with 5 verts 
     def triangulate_ngons ( self):
@@ -83,8 +92,42 @@ class Test:
             print( 'PASSED: txcoords')
         else: print( 'FAILED: txcoords')
 
+    def pointInstancer( self):
+        ### utestinsatncer.hiplc
+        usdaString = """
+def PointInstancer "copies" (
+    kind = "group"
+)
+{
+    float3[] extent.timeSamples = {
+        1: [(-1.6269288, -1.9177473, -2.4387898), (2.011207, 1.2510879, 2.0325248)],
+    }
+    int64[] invisibleIds = []
+    quath[] orientations = [(0.707031, -0.707031, 5.96046e-08, 0), (0.707031, 0.235718, -0.666504, 0), (0.953125, 0.174927, 0.247314, 0), (0.302979, 0.550293, 0.77832, 0)]
+    point3f[] positions = [(0, 1, 0), (-0.9428103, -0.3333297, 0), (0.47140515, -0.3333297, 0.8164976), (0.47140515, -0.3333297, -0.8164976)]
+    int[] protoIndices = [0, 0, 0, 0]
+    rel prototypes = </out/copies/Prototypes/hidden/cube>
+    float3[] scales = [(1, 0.99999994, 0.99999994), (2, 2, 2), (2.9999998, 3.0000002, 3.0000002), (4, 4, 4)]
+}
+"""
+        instancerStage = self.createInlineUsdStage( _bigString = usdaString)
+        usdScene = oomUsd.Reader( _usdFile = instancerStage, _unitTest = True)
+        usdScene.traverseScene( _timeCode = 1)
+        bsa = oomBella.SceneAscii( _usdScene = usdScene, _unitTest = True)
+        for prim in usdScene.instancers.keys():
+            bsa.writePointInstance( _prim = prim, _instancers = usdScene.instancers[ prim])
+        bellaString = bsa.file.getvalue()
+        expected = """instancer copies_de13c62c:
+  .name                       = "copies";
+  .steps[0].instances         = mat4f[4]{1 -8.43207e-08 -8.43027e-08 0 -8.43207e-08 -0.000213623 -1 0 8.43027e-08 1 -0.000213623 0 0 1 0 1 0.221965 -0.628825 1.88555 0 -0.628825 1.77761 0.66685 0 -1.88555 -0.66685 -0.000427246 0 -0.94281 -0.33333 0 1 2.63386 0.258974 -1.4127 0 0.258974 2.81683 0.999211 0 1.4127 -0.999211 2.45068 0 0.471405 -0.33333 0.816498 1 -0.844122 3.42492 -1.8861 0 3.42492 1.57849 1.33352 0 1.8861 -1.33352 -3.26563 0 0.471405 -0.33333 -0.816498 1};
+"""
+        if expected in bellaString: print( 'Passed: PointInstancer')    
+        else: print( 'Failed: PointInstancer')        
+
+
 oomTest = Test()
 oomTest.triangulate_ngons()
 oomTest.oomerUsdNormals()
+oomTest.pointInstancer()
       
 

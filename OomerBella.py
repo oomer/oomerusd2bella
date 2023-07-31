@@ -32,6 +32,7 @@ from pxr import Usd, Gf, UsdGeom, UsdShade, UsdLux
 from pathlib import Path  # used for cross platform file paths
 import re, json
 import os.path 
+import io  # used for unittests, in memory file like
 
 ## oomer modules
 import OomerUtil as oomUtil
@@ -42,11 +43,9 @@ class SceneAscii:
                   _usdScene = False,
                   _debug = False,
                   _colorDome = False,
+                  _unitTest = False,
                 ):
-        if not _bsaFile.parent.exists():
-            _bsaFile.parent.mkdir()
-        self.bsaFile = _bsaFile
-        self.file = open( str( _bsaFile), 'w')
+
         self.renderer_up_axis = 'Z'
         self.world_nodes = []
         self.stage = _usdScene
@@ -54,13 +53,22 @@ class SceneAscii:
         self.colorDome = _colorDome
         self.debug = _debug
 
-        self.writeHeader()
-        self.writeGlobal()
-        self.writeState()
-        self.writeBeautyPass()
-        self.writeGroundPlane()
-        if _usdScene.copyright: 
-            self.writeString( 'copyright', json.dumps ( _usdScene.copyright))
+        if not _unitTest:
+            if not _bsaFile.parent.exists():
+                _bsaFile.parent.mkdir()
+            self.bsaFile = _bsaFile
+            self.file = open( str( _bsaFile), 'w')
+            self.writeHeader()
+            self.writeGlobal()
+            self.writeState()
+            self.writeBeautyPass()
+            self.writeGroundPlane()
+            if _usdScene.copyright: 
+                self.writeString( 'copyright', json.dumps ( _usdScene.copyright))
+        else:
+            self.bsaFile = False
+            self.file = io.StringIO()
+
         self.camera = ''
         u = self.stage.meters_per_unit  
         if self.stage.up_axis == self.renderer_up_axis: # up axis matches Bella
@@ -349,8 +357,8 @@ class SceneAscii:
                                    _nparray = np_matrix4_1d,
                                    _rbracket = ')',
                                  )
-        if primVisibility == 'invisible':
-            self.writeNodeAttrib( _name = 'visibility', _value = '"hidden"')
+        #if primVisibility == 'invisible':
+        #    self.writeNodeAttrib( _name = 'visibility', _value = '"hidden"')
         ###if material_name != 'None':
         ###    self.writeNodeAttrib( _name = 'material',       
         ###                        _value = material_name,
@@ -420,19 +428,72 @@ class SceneAscii:
                                    _rbracket = ')',
                                  )
 
+    def writePrimitive( self,
+                        _prim = False,
+                        _primitives = False, 
+                        _xformCache = False, 
+                     ):
+        primName = _prim.GetName() 
+        uuid = oomUtil.uuidSanitize( primName, _hashSeed = _prim.GetPath()) 
+        primType = _primitives[_prim][ 'type']
+        np_matrix4 = np.array( _xformCache.GetLocalTransformation( _prim)[0])
+        # INSERT XFORM 
+        # the name of xform should be the same as usd gprim
+        # this way the GetChildren() query done anywhere will be correct
+        # since we create intermediate xforms here, renaming the prim with mesh is easy 
+        self.writeNode( _type = 'xform',
+                        _uuid = uuid,
+                       )
+        self.writeNodeAttrib( _name = 'name', _value= '"' + primName + '"')
+        uuid += '_m' # xform gets OG name, mesh gets _mesh name
+        np_matrix4_1d = np_matrix4.ravel()  # reshape [[a1, b1, c1, d1],[a2, b2, c2, d2]] to [(a1 b1 c1 d1 a2 b2 c2 d2)] 
+        self.writeNodeAttrib( _name = 'children[*]', _value = uuid)
+        self.writeNodeAttribNumpy( _name = 'steps[0].xform',
+                                   _type = 'mat4',
+                                   _lbracket = '(',
+                                   _nparray = np_matrix4_1d,
+                                   _rbracket = ')',
+                                 )
+        if primType == 'Sphere':
+            self.writeNode( _type = 'sphere', _uuid = uuid)
+            self.writeNodeAttrib( _name = 'name', _value= '"' + primName + '"')
+            self.writeNodeAttrib( _name = 'radius', _value = str( _primitives[_prim][ 'radius']) + 'f')
+        if primType == 'Cube':
+            self.writeNode( _type = 'box', _uuid = uuid)
+            self.writeNodeAttrib( _name = 'name', _value= '"' + primName + '"')
+            self.writeNodeAttrib( _name = 'sizeX', _value = str( _primitives[_prim][ 'size']) + 'f')
+            self.writeNodeAttrib( _name = 'sizeY', _value = str( _primitives[_prim][ 'size']) + 'f')
+            self.writeNodeAttrib( _name = 'sizeZ', _value = str( _primitives[_prim][ 'size']) + 'f')
+        if primType == 'Cylinder':
+            self.writeNode( _type = 'cylinder', _uuid = uuid)
+            self.writeNodeAttrib( _name = 'name', _value= '"' + primName + '"')
+            self.writeNodeAttrib( _name = 'radius', _value = str( _primitives[_prim][ 'radius']) + 'f')
+            self.writeNodeAttrib( _name = 'height', _value = str( _primitives[_prim][ 'height']) + 'f')
+
+
+
     def writePointInstance(  self,
                              _prim = False,
                              _instancers = False, 
-                     ):
-        print( _prim)
-        multMat4 = np.array(_instancers)
+                          ):
+        multMat4 = np.array(_instancers['mat4'])
         primName = _prim.GetName() 
         name = oomUtil.uuidSanitize( primName, _hashSeed = _prim.GetPath()) 
         self.writeNode( _type = 'instancer', _uuid = name)
         self.writeNodeAttrib( _name = 'name',
                               _value = '"' + primName + '"',
                             )
-        #self.writeNodeAttrib( _name = 'children[*]', _value = instanceName)
+        #print( dir( self.stage.stage))        ### bad renaming 
+
+        for protoSdfPath in _instancers['protoChildren'].GetTargets():
+            protoPrim = self.stage.stage.GetPrimAtPath( protoSdfPath) ### bad stage stage naming
+            if protoPrim:
+                uuid = oomUtil.uuidSanitize( protoPrim.GetName(), _hashSeed = protoPrim.GetPath()) 
+                self.writeNodeAttrib( _name = 'children[*]', _value = uuid)
+
+        #self.writeNodeAttrib( _name = 'children[*]', _value = 'cubeprim')
+        #self.writeNodeAttrib( _name = 'children[*]', _value = 'sphereprim')
+        #self.writeNodeAttrib( _name = 'children[*]', _value = 'cylinderprim')
         self.writeNodeAttribNumpy( _name = 'steps[0].instances',
                                    _type = 'mat4f[' + str( len( multMat4)) +  ']',
                                    _nparray = multMat4.ravel(),
@@ -466,7 +527,6 @@ class SceneAscii:
             alusd_name = _prim.GetAttribute( 'alusd_originalName').Get() # [ ] GetName() gives us a useless "GEO" name, original name much more relevant
             if isinstance( alusd_name, str): prim_name = alusd_name  
         name = oomUtil.uuidSanitize( primName, _hashSeed = _prim.GetPath()) 
-
 
         self.stage.xform_cache.SetTime( _timeCode)  ### Set xform cache to animation time
         np_matrix4 = np.array( self.stage.xform_cache.GetLocalTransformation( _prim)[0]) #flatten transforms to mat4
@@ -532,8 +592,8 @@ class SceneAscii:
         if materialBinding.GetTargets():
             materialSdfPath = materialBinding.GetTargets()[ 0]
             materialPrim = _usdScene.stage.GetPrimAtPath( materialSdfPath)
-            if materialPrim: ### if null then this material may be deactivated
-                print('mat', materialSdfPath, type( materialSdfPath), materialPrim)
+            #if materialPrim: ### if null then this material may be deactivated
+            #    print('mat', materialSdfPath, type( materialSdfPath), materialPrim)
         # Workaround to get useful name from Animal Logic prototype
         primName = _prim.GetName() # no wackiness here
         alusd_name = False 
@@ -841,6 +901,7 @@ class SceneAscii:
         # TODO why am I multiplying by such a large amount? Scene scale
         if bellaType == "directionalLight":
             angle = _lightDict['UsdLux'].GetAngleAttr().Get( time = _timeCode )
+            self.writeNodeAttrib(   _name = 'size', _value = str( angle) +'f')
         else: ### Why skip distant light?
             self.writeNodeAttrib(   _name = 'multiplier', _value = '100000f')
 

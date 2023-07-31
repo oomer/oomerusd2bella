@@ -49,10 +49,13 @@ class Reader:
         if not _unitTest:
             self.stage = Usd.Stage.Open( str( _usdFile))
             if _usda: self.stage.Export( "./"+str( Path( _usdFile).with_suffix( '.usda')))
-        else:
+        elif isinstance( _usdFile, Usd.Stage): # slipstream in usd stage created in memory
+            self.stage = _usdFile
+        else: # TODO switch to slipstream method above
             self.stage = Usd.Stage.CreateInMemory( _usdFile)
 
         self.meshes = {}
+        self.primitives = {} ### sphere, cube ( bella supports box), cylinder ( no capsule, cone )
         self.lights = {}
         self.xforms = {}
         self.instancers = {} ### point instancing
@@ -117,7 +120,8 @@ class Reader:
         if self.meters_per_unit == 0.01:
             self.cam_unit_scale = 1
         else: # [ ] hardcoded but should be calculated based on self.meters_per_unit 
-            self.cam_unit_scale = 1
+            self.cam_unit_scale = 0.01
+        self.cam_unit_scale = self.meters_per_unit / 10 ### As per Pixar use 1/10th of metres_per_unit
 
         self.mat4_identity = np.array( [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]], dtype='float64')
         self.xform_cache = UsdGeom.XformCache()
@@ -137,7 +141,9 @@ class Reader:
     ### leads to lack of inherited ( from parent or grandparent ) knowledge like kind, visibility, etc
     ### by using IsPostVisit() we descend each branch and toggle on inheritable switches like visibility
     ### stored in visitVisibility
-    def traverseScene ( self):
+    def traverseScene ( self,
+                       _timeCode = False,
+                      ):
         ignorePrim = [] # bypass list for unwanted shaders and textures, ie proxy
 
         subtreeGroup      = False
@@ -155,14 +161,14 @@ class Reader:
         ### currently instancer.hiplc creates BOTH a /hidden/sphere and a /Instances/Prototypes/hidden/sphere, the latter instance referencing to
         ### the former, on top of this the actual instances point to the Prototype, which begs the question, why have two degrees of separation?
         ### to be continued
-        for ea in usdPrototypes:
-            print(type(ea))
-            for t in  Usd.PrimRange(ea):
-                print( t)
+        #for ea in usdPrototypes:
+        #    print(type(ea))
+        #    for t in  Usd.PrimRange(ea):
+        #        print( t)
         for eachPrototype in usdPrototypes:
             children = self.prototype_children + list( eachPrototype.GetChildren())
             listPrototypePrims =  list( iter( Usd.PrimRange( eachPrototype)))
-            print(usdPrototypes,children,listPrototypePrims)
+            #print(usdPrototypes,children,listPrototypePrims)
 
         ### TODO unittest for fragile complex invisibility and group tracking system 
         for prim in primIter:
@@ -204,7 +210,7 @@ class Reader:
                 ### this seems Bella specific because of uuid storage, seems ok
                 if eachParent.GetName() == '/' and not subtreeInvisible: # append to root list if this is a toplevel prim
                 #if eachParent.GetName() == '/':
-                    print(primUUID)
+                    #print(primUUID)
                     self.root_prims.append( primUUID)
 
                 #print( subtreeCounter, 'group:', subtreeGroup, 'invisible:', subtreeInvisible, subtreeCounter, 'purpose:', primPurpose, prim.GetPrimPath())
@@ -355,6 +361,24 @@ class Reader:
                     self.lights[ prim ] = {}
                     self.lights[ prim][ 'UsdLux'] = lightPrim
                     self.lights[ prim][ 'texture'] = lightPrim.GetTextureFileAttr().Get()
+
+                if primType == 'Sphere':
+                    self.primitives[ prim] = {}
+                    self.primitives[ prim][ 'type']= 'Sphere'
+                    usdGeom = UsdGeom.Sphere( prim)
+                    self.primitives[ prim][ 'radius'] = usdGeom.GetRadiusAttr().Get()
+                if primType == 'Cube':
+                    self.primitives[ prim] = {}
+                    self.primitives[ prim][ 'type']= 'Cube'
+                    usdGeom = UsdGeom.Cube( prim)
+                    self.primitives[ prim][ 'size'] =  usdGeom.GetSizeAttr().Get()
+                if primType == 'Cylinder':
+                    self.primitives[ prim] = {}
+                    self.primitives[ prim][ 'type']= 'Cylinder'
+                    usdGeom = UsdGeom.Cylinder( prim)
+                    self.primitives[ prim][ 'radius'] = usdGeom.GetRadiusAttr().Get()
+                    self.primitives[ prim][ 'height'] = usdGeom.GetHeightAttr().Get()
+
                 if primType == 'PointInstancer':
                     ### loop point instances
                     ### - [ ] separate out each prototype index
@@ -364,23 +388,32 @@ class Reader:
                     ### is saving of memory when dealing with billions of instances, Bella only uses mat4f
                     listMat4 = []
                     primPointInstancer = UsdGeom.PointInstancer( prim)
-                    orientationBuf = primPointInstancer.GetOrientationsAttr().Get()
-                    positionBuf = primPointInstancer.GetPositionsAttr().Get()
-                    scaleBuf = primPointInstancer.GetScalesAttr().Get()
-                    for pointNum in range(len( orientationBuf)): 
-                        quatOrient = orientationBuf[pointNum]
-                        quatf = Gf.Quatf( quatOrient) ### quatOrient is stored half precision 
-                        pos = positionBuf[pointNum]
-                        scale = scaleBuf[pointNum]
+                    orientationBuf = primPointInstancer.GetOrientationsAttr().Get( time = _timeCode)
+                    positionBuf = primPointInstancer.GetPositionsAttr().Get( time = _timeCode )
+                    scaleBuf = primPointInstancer.GetScalesAttr().Get( time = _timeCode)
+                    if positionBuf: ### TODO is this check required
+                        self.instancers[ prim] = {}
+                        protoBinding = prim.GetRelationship('prototypes')
+                        self.instancers[ prim][ 'protoChildren'] = protoBinding
+                        #for protoSdfPath in protoBinding.GetTargets():
+                        #    print(protoSdfPath)
+                        #    protoPrim = self.stage.GetPrimAtPath( protoSdfPath)
+                        #    print(protoPrim)
 
-                        ### buildup matrix
-                        scaleMat4 = Gf.Matrix4f() 
-                        scaleMat4.SetScale( scale) ### merge 
-                        rot = Gf.Rotation( quatOrient) ### quatOrient is stored half precision 
-                        mat4a = Gf.Matrix4f() 
-                        rotPosMat = mat4a.SetTransform( rot, pos)
-                        listMat4.append( scaleMat4 * rotPosMat) ### apply sclae
-                    self.instancers[ prim] = listMat4
+                        for pointNum in range(len( positionBuf)): 
+                            quatOrient = orientationBuf[pointNum]
+                            quatf = Gf.Quatf( quatOrient) ### quatOrient is stored half precision 
+                            pos = positionBuf[pointNum]
+                            scale = scaleBuf[pointNum]
+
+                            ### buildup matrix
+                            scaleMat4 = Gf.Matrix4f() 
+                            scaleMat4.SetScale( scale) ### merge 
+                            rot = Gf.Rotation( quatOrient) ### quatOrient is stored half precision 
+                            mat4a = Gf.Matrix4f() 
+                            rotPosMat = mat4a.SetTransform( rot, pos)
+                            listMat4.append( scaleMat4 * rotPosMat) ### apply sclae
+                        self.instancers[ prim][ 'mat4'] = listMat4
 
     def resolveInstanceToPrim( self, _prim): # hardcoded to ALUSD
         usdPrototype= _prim.GetPrototype() # Animal Logic Alab.usd  should return GEO GEOPROXY Material

@@ -134,7 +134,8 @@ for timeCode in range( startFrame, endFrame, 1):  # usd timecode starts on frame
     # - [ ] I believe that prototype prims were birthed at origin
     # - [ ] document thsi better, not sure what False means
   #  usdScene.traverseScene( filter_by_purpose=False)
-    usdScene.traverseScene()
+    usdScene.traverseScene( _timeCode = timeCode,
+                          )
 
     ### MESH 
     ###=====
@@ -248,13 +249,13 @@ for timeCode in range( startFrame, endFrame, 1):  # usd timecode starts on frame
         bsa.writeShaderTexture( shader, 
                                 usdScene.uv_textures[ shader][ 'file'], 
                               )
+    for prim in usdScene.primitives.keys(): 
+        bsa.writePrimitive( _prim = prim, 
+                            _primitives = usdScene.primitives, 
+                            _xformCache = usdScene.xform_cache,
+                          )
 
     for prim in usdScene.instancers.keys():
-        #mat4f[3]{1 0 0 0 0 1 0 0 0 0 1 0 0.1 0 0 1 1 0 0 0 0 1 0 0 0 0 1 0 0 0.1 0 1 1 0 0 0 0 1 0 0 0 0 1 0 -0.1 0 0 1};
-        #w = np.array(([[1,0,0,0],[0,1,0,0],[0,0,1,0],[0.1,0,0,1]],[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0.1,0,1]],[[1,0,0,0],[0,1,0,0],[0,0,1,0],[-0.1,0,0,1]]));
-        #print(w)
-        #print(np.array(usdScene.instancers[ptInstance]))
-        #print(np.array(usdScene.instancers[ptInstance]).ravel())
         bsa.writePointInstance( _prim = prim,
                                 _instancers = usdScene.instancers[ prim], 
                               )

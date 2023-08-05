@@ -50,14 +50,14 @@ class Test:
         return usdStage
 
     # Test single ngon with 5 verts 
-    def triangulate_ngons ( self):
+    def triangulateNgons ( self):
         faceVertexCounts = [ 5]
         faceVertexIndices = [ 0, 1, 3, 2, 4]
-        _faceVertexCounts, _faceVertexIndices = self.usdScene.triangulate_ngons( faceVertexCounts, faceVertexIndices)
+        _faceVertexCounts, _faceVertexIndices = self.usdScene.triangulateNgons( faceVertexCounts, faceVertexIndices)
         if (_faceVertexCounts, _faceVertexIndices) == ([ 3, 3, 3] , [ 0, 1, 3, 0, 3, 2, 0, 2, 4]):
-            print( 'PASSED:', 'oomUsd.Reader.triangulate_ngons()')
+            print( 'PASSED:', 'oomUsd.Reader.triangulateNgons()')
         else:
-            print( 'FAILED:', 'oomUsd.Reader.triangulate_ngons()')
+            print( 'FAILED:', 'oomUsd.Reader.triangulateNgons()')
 
     def oomerUsdNormals ( self):
         ## icospheresomesmooth.blend
@@ -112,10 +112,10 @@ def PointInstancer "copies" (
 """
         instancerStage = self.createInlineUsdStage( _bigString = usdaString)
         usdScene = oomUsd.Reader( _usdFile = instancerStage, _unitTest = True)
-        usdScene.traverseScene( _timeCode = 1)
+        usdScene.traverseScene()
         bsa = oomBella.SceneAscii( _usdScene = usdScene, _unitTest = True)
         for prim in usdScene.instancers.keys():
-            bsa.writePointInstance( _prim = prim, _instancers = usdScene.instancers[ prim])
+            bsa.writePointInstance( _prim = prim)
         bellaString = bsa.file.getvalue()
         expected = """instancer copies_de13c62c:
   .name                       = "copies";
@@ -126,7 +126,7 @@ def PointInstancer "copies" (
 
 
 oomTest = Test()
-oomTest.triangulate_ngons()
+oomTest.triangulateNgons()
 oomTest.oomerUsdNormals()
 oomTest.pointInstancer()
       

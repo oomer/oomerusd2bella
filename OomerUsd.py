@@ -66,17 +66,23 @@ class Reader:
         self.uv_textures = {}
         self.prototype_instances = {}
         self.prototype_children = []
-        self.root_prims = []
+        self.rootPrims = []
         oomerUtility = oomUtil.Mappings()
         self.usdPreviewSurface = oomerUtility.usdPreviewSurface
         ###self.udim_indices = { *() } # This defines a Python set, sets can only store a value once
-
+        self.timeCode = False
         ### GLOBALS
         ###========
         self.copyright = False
         self.blender = False
         self.modo = False
         self.houdini = False
+
+
+        self.start_timecode = self.stage.GetStartTimeCode()
+        self.timecodes_per_second = self.stage.GetTimeCodesPerSecond()
+        self.end_timecode = self.stage.GetEndTimeCode()
+        self.defaultPrim = self.stage.GetDefaultPrim()
 
         if self.stage.HasMetadata( 'metersPerUnit'):
             self.meters_per_unit = self.stage.GetMetadata( 'metersPerUnit')
@@ -86,16 +92,6 @@ class Reader:
             self.up_axis = self.stage.GetMetadata( 'upAxis')
         else:
             self.up_axis = 'Y'
-        if self.stage.HasMetadata( 'timeCodesPerSecond'):
-            self.timecodes_per_second = self.stage.GetMetadata( 'timeCodesPerSecond')
-        else:
-            self.timecodes_per_second = 30
-        if self.stage.HasMetadata( 'startTimeCode'):
-            self.start_timecode = self.stage.GetMetadata( 'startTimeCode')
-        else:
-            self.start_timecode = 0
-        if self.stage.HasMetadata( 'endTimeCode'):
-            self.end_timecode = self.stage.GetMetadata( 'endTimeCode')
         if self.stage.HasMetadata( 'customLayerData'):
             self.customLayerData = self.stage.GetMetadata( 'customLayerData')
             for customName in self.customLayerData.keys():
@@ -104,29 +100,33 @@ class Reader:
                 if customName == 'houdini':
                     self.houdini = self.customLayerData[ customName]
                     print( self.customLayerData[ customName])
-        if self.stage.HasMetadata( 'doc'):
-            docString = self.stage.GetMetadata( 'doc')
-            print( docString)
-            if "Blender" in docString:
-                print( 'found Blender')
-        if self.stage.HasMetadata( 'defaultPrim'):
-            defaultPrim = self.stage.GetMetadata( 'defaultPrim')
-
-        self.timecodes_per_second = self.stage.GetMetadata( 'timeCodesPerSecond')
-        self.start_timecode = self.stage.GetMetadata( 'startTimeCode')
-        self.end_timecode = self.stage.GetMetadata( 'endTimeCode')
+        #if self.stage.HasMetadata( 'doc'):
+        #    docString = self.stage.GetMetadata( 'doc')
+        #    print( docString)
+        #    if "Blender" in docString:
+        #        print( 'found Blender')
 
         ## Record camera scale multiplier to ensure later cam transforms sync with world unit
-        if self.meters_per_unit == 0.01:
+        if not self.blender:
+            self.cam_unit_scale = self.meters_per_unit * 100 
+        else:
             self.cam_unit_scale = 1
-        else: # [ ] hardcoded but should be calculated based on self.meters_per_unit 
-            self.cam_unit_scale = 0.01
-        self.cam_unit_scale = self.meters_per_unit / 10 ### As per Pixar use 1/10th of metres_per_unit
+        # Modo Pixar use cm , self.meters_per_unit == 0.01 
+        # Houdni, Blender , self.meters_per_unit == 1
+        ### Houdini example with metersPerUnit=1: float focalLength = 0.35
+        ### thus focalLength expressed in units of 1/10 of 1 metre aka 1 decimeter
+        ### 0.35 decimeters = 3.5 cm = 35 mm 
+        ### very confusing but explained in https://groups.google.com/u/3/g/usd-interest/c/6EAeg-d53uI
+        ### *Blender* fails to output focal length and aperture according to Pixar api in 1/10 of metresperunit but rather they use mm
+        ### *Blender* uses metersPerUnit=1 but outputs focalLength=35
+        ### *Blender* camera_unit_scale has to pretend that metresPerUnit==0.01
+        ### I submitted bug report pre 3.x, there was some discussion but 3.6 is still wrong
 
         self.mat4_identity = np.array( [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]], dtype='float64')
         self.xform_cache = UsdGeom.XformCache()
 
-    def GetAttribute( self, attribute ): # UNUSED here for future use
+    '''
+    def GetAttribute( self, attribute): # UNUSED here for future use
         # - [ ] prim attributes can store local values OR have remote inputs values from another prim output
         if attribute.HasAuthoredConnections(): 
             sdfPath =  attribute.GetConnections()[0] # USD_API bool GetConnections ( SdfPathVector * sources ) const
@@ -134,16 +134,17 @@ class Reader:
             return connectedPrim.GetAttribute( sdfPath.name).Get() ### USD_API UsdAttribute GetAttribute ( const TfToken & attrName ) const
         else:
             return attribute.Get()
-
+    '''
 
     ### rewrite of traverse_scene 2023
     ### due to usd complexity, the naive earlier approach of using PrimRange to traverse all prims
     ### leads to lack of inherited ( from parent or grandparent ) knowledge like kind, visibility, etc
     ### by using IsPostVisit() we descend each branch and toggle on inheritable switches like visibility
-    ### stored in visitVisibility
-    def traverseScene ( self,
-                       _timeCode = False,
-                      ):
+    # - [x] Removed timecode during traversal, was erroneously storing time specific data before it is needed
+    ### Traversal is all about generalized sorting of prims into python dictionaries
+    ### the usefulness of these dictionaries waxes and wanes as I learn more about the API
+    ### Expect traversal to be refactored often
+    def traverseScene ( self):
         ignorePrim = [] # bypass list for unwanted shaders and textures, ie proxy
 
         subtreeGroup      = False
@@ -152,7 +153,7 @@ class Reader:
         subtreePrototype  = False
         subtreeInvisible  = False
         postVisit         = False
-        primIter = iter(Usd.PrimRange.PreAndPostVisit(self.stage.GetPseudoRoot()))
+        primIter = iter( Usd.PrimRange.PreAndPostVisit( self.stage.GetPseudoRoot()))
         subtreeCounter = 0
 
         ancestInvisiblePrim = False
@@ -161,22 +162,17 @@ class Reader:
         ### currently instancer.hiplc creates BOTH a /hidden/sphere and a /Instances/Prototypes/hidden/sphere, the latter instance referencing to
         ### the former, on top of this the actual instances point to the Prototype, which begs the question, why have two degrees of separation?
         ### to be continued
-        #for ea in usdPrototypes:
-        #    print(type(ea))
-        #    for t in  Usd.PrimRange(ea):
-        #        print( t)
         for eachPrototype in usdPrototypes:
             children = self.prototype_children + list( eachPrototype.GetChildren())
             listPrototypePrims =  list( iter( Usd.PrimRange( eachPrototype)))
-            #print(usdPrototypes,children,listPrototypePrims)
 
         ### TODO unittest for fragile complex invisibility and group tracking system 
         for prim in primIter:
             primGeom    = UsdGeom.Mesh( prim)
             primKind    = Usd.ModelAPI( prim).GetKind()
             primPurpose = primGeom.GetPurposeAttr().Get()
-            #primPurpose = primGeom.ComputePurpose() ### compute may be expensive on large scenes, our stack based traversal method
-            # is appropriate to gather this info as we walk through each prim
+            #primPurpose = primGeom.ComputePurpose() ### compute may be expensive on large scenes according to API docs, 
+            # our stack based traversal method is appropriate to gather this info as we walk through each prim
             primType    = prim.GetTypeName()
             primName    = prim.GetName()
             primUUID = oomUtil.uuidSanitize( prim.GetName(), _hashSeed = prim.GetPath()) 
@@ -209,39 +205,37 @@ class Reader:
                 eachParent = prim.GetParent()
                 ### this seems Bella specific because of uuid storage, seems ok
                 if eachParent.GetName() == '/' and not subtreeInvisible: # append to root list if this is a toplevel prim
-                #if eachParent.GetName() == '/':
-                    #print(primUUID)
-                    self.root_prims.append( primUUID)
+                    ### skip Camera xform because we create a new camera xform that can be orbited because it is in Bella's coord system
+                    # rather than Usd coord system
+                    foundCamera = False
+                    for childPrim in prim.GetChildren():
+                        if childPrim.GetTypeName() == 'Camera': foundCamera = True
+                    if not foundCamera: self.rootPrims.append( primUUID)
 
                 #print( subtreeCounter, 'group:', subtreeGroup, 'invisible:', subtreeInvisible, subtreeCounter, 'purpose:', primPurpose, prim.GetPrimPath())
                 #print( subtreeCounter, 'purpose:', primPurpose, prim.GetPrimPath(), 'ins', prim.IsInstanceable(), prim.IsInstance())
 
-                ### Usd xform seems to be the 
                 if primType == 'Xform' or primType == 'Scope':
                     hasAuthoredReferences = prim.HasAuthoredReferences()
                     self.xforms[ prim ]  = {}
-                    self.xforms[ prim]['hasAuthoredReferences'] = hasAuthoredReferences
-                    self.xforms[ prim]['isInvisible'] = subtreeInvisible
-                    self.xforms[ prim]['instanceUUID'] = False
+                    self.xforms[ prim][ 'hasAuthoredReferences'] = hasAuthoredReferences
+                    self.xforms[ prim][ 'isInvisible'] = subtreeInvisible
+                    self.xforms[ prim][ 'instanceUUID'] = False
 
                     if prim.IsInstance():
-                        # Dictionary map of xform prim to instance prim
-                        #print( self.resolve_instance( prim))
-                        #self.prototype_instances[ prim] =  self.resolveInstanceToPrim( prim)
-                        instancePrim = self.resolve_instance( prim)
+                        instancePrim = self.resolveInstance( prim)
                         instanceUUID = oomUtil.uuidSanitize( instancePrim.GetName(), _hashSeed = instancePrim.GetPath()) 
-                        self.xforms[ prim]['instanceUUID'] = instanceUUID
-                        self.prototype_instances[ prim] =  self.resolve_instance( prim)
+                        self.xforms[ prim][ 'instanceUUID'] = instanceUUID
+                        self.prototype_instances[ prim] =  self.resolveInstance( prim)
                 ### 
                 if primType == 'Mesh':
                     instancePrim = False
-                    if prim.HasAuthoredReferences(): ### Referencing is used for both local and file insatncing
-                        instancePrim = self.resolve_instance( prim)
+                    if prim.HasAuthoredReferences(): ### Referencing is used for both local and file instancing
+                        instancePrim = self.resolveInstance( prim)
 
                     self.meshes[ prim ]  = {}
                     self.meshes[ prim][ 'instance'] = instancePrim
                     self.meshes[ prim][ 'isInvisible'] = subtreeInvisible
-                    #if materialPrim: self.meshes[ prim][ 'material_prim'] = materialPrim
 
                 # - [ ] Treat UsdPreviewSurface as a equivalent to a Bella PBR material
                 if primType == 'Material' and prim not in ignorePrim: 
@@ -301,7 +295,7 @@ class Reader:
                                                 ### SDF_API SdfAssetPath ( const std::string & 	path,
                                                 ###                        const std::string & 	resolvedPath 
                                                 ###                      )	
-                                                if (self.file.parent != Path( absFilePath)): ### Use relative path unless in same dir
+                                                if ( self.file.parent != Path( absFilePath)): ### Use relative path unless in same dir
                                                     ### pathlib relative_to files
                                                     ### ValueError: '/Users/harvey/oomerusd2bella/tv_retro/0/tv_retro_body_bc.png' is not in the subpath of '/Users/harvey/oomerusd2bella/houdini' OR one path is relative and the other is absolute. 
                                                     #file = Path(os.path.relpath( absFilePath, self.file.parent.resolve()))
@@ -326,104 +320,36 @@ class Reader:
                 if primType == 'Camera':
                     self.cameras[ prim]  = {}
 
-                if primType == 'SphereLight':
+                ### Lights TODO downgrade from dict to array
+                if primType in [ 'SphereLight', 'DistantLight', 'RectLight', 'DiskLight', 'DomeLight']:
                     self.lights[ prim] = {}
-                    lightPrim = UsdLux.SphereLight( prim)
-                    self.lights[ prim][ 'UsdLux'] = lightPrim
 
-                ### DistantLight
-                if primType == 'DistantLight':
-                    self.lights[ prim] = {}
-                    lightPrim = UsdLux.DistantLight( prim)
-                    self.lights[ prim][ 'UsdLux'] = lightPrim
-                    self.lights[ prim][ 'angle']  = lightPrim.GetAngleAttr().Get()
-                ### Arealight
-                if primType == 'RectLight':
-                    self.lights[ prim ] = {}
-                    lightPrim = UsdLux.RectLight( prim)
-                    self.lights[ prim][ 'UsdLux']   = lightPrim
-                    self.lights[ prim][ 'width']    = lightPrim.GetWidthAttr().Get()
-                    self.lights[ prim][ 'height']   = lightPrim.GetHeightAttr().Get()
-                    self.lights[ prim][ 'texture']  = lightPrim.GetTextureFileAttr().Get()
-                ### AreaLight 
-                if primType == 'DiskLight':
-                    self.lights[ prim] = {}
-                    lightPrim = UsdLux.DiskLight( prim)
-                    self.lights[ prim][ 'UsdLux'] = lightPrim
-                    self.lights[ prim][ 'radius'] = lightPrim.GetRadiusAttr().Get()
-                    
-                # Spotlight
-                if primType == 'SpotLight':
-                    self.lights[ prim ] = {}
-                    self.lights[ prim][ 'UsdLux'] = False
-                # Domelight            
-                if primType == 'DomeLight':
-                    self.lights[ prim ] = {}
-                    self.lights[ prim][ 'UsdLux'] = lightPrim
-                    self.lights[ prim][ 'texture'] = lightPrim.GetTextureFileAttr().Get()
-
-                if primType == 'Sphere':
+                ### Primitives
+                if primType in [ 'Sphere', 'Cube', 'Cylinder']:
                     self.primitives[ prim] = {}
-                    self.primitives[ prim][ 'type']= 'Sphere'
-                    usdGeom = UsdGeom.Sphere( prim)
-                    self.primitives[ prim][ 'radius'] = usdGeom.GetRadiusAttr().Get()
-                if primType == 'Cube':
-                    self.primitives[ prim] = {}
-                    self.primitives[ prim][ 'type']= 'Cube'
-                    usdGeom = UsdGeom.Cube( prim)
-                    self.primitives[ prim][ 'size'] =  usdGeom.GetSizeAttr().Get()
-                if primType == 'Cylinder':
-                    self.primitives[ prim] = {}
-                    self.primitives[ prim][ 'type']= 'Cylinder'
-                    usdGeom = UsdGeom.Cylinder( prim)
-                    self.primitives[ prim][ 'radius'] = usdGeom.GetRadiusAttr().Get()
-                    self.primitives[ prim][ 'height'] = usdGeom.GetHeightAttr().Get()
 
                 if primType == 'PointInstancer':
                     ### loop point instances
                     ### - [ ] separate out each prototype index
-                    ### - [ ] merge Usd's quat, point, scale into 4x4 matrix
+                    ### - [x] merge Usd's quat, point, scale into 4x4 matrix
                     ### - [ ] store 4x4 matrix per protoIndex
+                    ### - [x] move _timeCode out of this function, since we don't want to traverse each frame
                     ### rationale behind Usd's decision to separate out orientation, translation and scale
                     ### is saving of memory when dealing with billions of instances, Bella only uses mat4f
-                    listMat4 = []
                     primPointInstancer = UsdGeom.PointInstancer( prim)
-                    orientationBuf = primPointInstancer.GetOrientationsAttr().Get( time = _timeCode)
-                    positionBuf = primPointInstancer.GetPositionsAttr().Get( time = _timeCode )
-                    scaleBuf = primPointInstancer.GetScalesAttr().Get( time = _timeCode)
+                    positionBuf = primPointInstancer.GetPositionsAttr()
+                    orientationBuf = primPointInstancer.GetOrientationsAttr()
+                    scaleBuf = primPointInstancer.GetScalesAttr()
                     if positionBuf: ### TODO is this check required
                         self.instancers[ prim] = {}
-                        protoBinding = prim.GetRelationship('prototypes')
+                        self.instancers[ prim][ 'orientationsAttr'] = orientationBuf
+                        self.instancers[ prim][ 'positionsAttr'] = positionBuf
+                        self.instancers[ prim][ 'scalesAttr'] = scaleBuf
+                        protoBinding = prim.GetRelationship( 'prototypes')
                         self.instancers[ prim][ 'protoChildren'] = protoBinding
-                        #for protoSdfPath in protoBinding.GetTargets():
-                        #    print(protoSdfPath)
-                        #    protoPrim = self.stage.GetPrimAtPath( protoSdfPath)
-                        #    print(protoPrim)
 
-                        for pointNum in range(len( positionBuf)): 
-                            quatOrient = orientationBuf[pointNum]
-                            quatf = Gf.Quatf( quatOrient) ### quatOrient is stored half precision 
-                            pos = positionBuf[pointNum]
-                            scale = scaleBuf[pointNum]
-
-                            ### buildup matrix
-                            scaleMat4 = Gf.Matrix4f() 
-                            scaleMat4.SetScale( scale) ### merge 
-                            rot = Gf.Rotation( quatOrient) ### quatOrient is stored half precision 
-                            mat4a = Gf.Matrix4f() 
-                            rotPosMat = mat4a.SetTransform( rot, pos)
-                            listMat4.append( scaleMat4 * rotPosMat) ### apply sclae
-                        self.instancers[ prim][ 'mat4'] = listMat4
-
-    def resolveInstanceToPrim( self, _prim): # hardcoded to ALUSD
-        usdPrototype= _prim.GetPrototype() # Animal Logic Alab.usd  should return GEO GEOPROXY Material
-        for eachChildPrim in usdPrototype.GetChildren():
-            if eachChildPrim.HasAttribute( 'purpose'):
-                if eachChildPrim.GetAttribute( 'purpose').Get() == 'render':
-                    return eachChildPrim # Assumes never having more than one prim with render purpose
-        return False
-
-    def resolve_instance(self, _prim ):
+    ###
+    def resolveInstance(self, _prim ):
         # The powerful layering system allowing usd to compose the scene from many sources
         # leads to roundabout ways to find the prim that introduces a mesh
         # There seems to be an instance method but Blender exports a <prepend references>
@@ -435,12 +361,13 @@ class Reader:
         sdfPath = compArc[0].GetTargetNode().GetPathAtIntroduction()
         return self.stage.GetPrimAtPath( sdfPath)
 
-    def triangulate_ngons( self, 
-                           _faceVertexCounts,  # int[]
-                           _faceVertexIndices, # int[] 
-                           _txcoordIndices = False,
-                           _normalIndices = False,
-                         ):
+    ### - [ ] TODO move function into a OomerProcess.py module leaving OomerUsd.py for reading and OomerBella.py for bella specific wrirting
+    def triangulateNgons( self, 
+                          _faceVertexCounts,  # int[]
+                          _faceVertexIndices, # int[] 
+                          _txcoordIndices = False, # int[]
+                          _normalIndices = False, # int[]
+                        ):
 
         ### feed original usd arrays, returns modfified usd arrays
         # triangulates polygons with greater than 4 vertices ( aka ngons )
@@ -455,7 +382,6 @@ class Reader:
             newTxcoordIndices = []
         if _normalIndices:
             npNormalIndices = np.array( _normalIndices)  #convert to nparray so we can use slicing
-            newNormalsIndices = []
 
         ogVertCount = 0 
         newVertCount = 0
@@ -473,16 +399,16 @@ class Reader:
         # usd_point_list is a 2D array of points in a mesh (faceVertexIndices stores indices to this list allowing multiple faces to share point data)
         # point data is XYZ location
 
-        for face in range(0,len( _faceVertexCounts)):
+        for face in range( 0, len( _faceVertexCounts)):
             numVertsPerFace = _faceVertexCounts[ face] 
             if numVertsPerFace < ngonVertexLimit: # default triangle and quad processing
                 newVertexCounts.append( numVertsPerFace)
-                newVertexIndices += list( npFaceVertexIndices[ ogVertCount :ogVertCount + int ( numVertsPerFace)])
+                newVertexIndices += list( npFaceVertexIndices[ ogVertCount :ogVertCount + int( numVertsPerFace)])
                 ### 2024
                 if _txcoordIndices: # optional explict indices
-                    newTxcoordIndices += list( npTxcoordIndices[ ogVertCount :ogVertCount + int ( numVertsPerFace)])
+                    newTxcoordIndices += list( npTxcoordIndices[ ogVertCount :ogVertCount + int( numVertsPerFace)])
                 if _normalIndices: # optional explict indices
-                    newNormalIndices += list( npNormalIndices[ ogVertCount :ogVertCount + int ( numVertsPerFace)])
+                    newNormalIndices += list( npNormalIndices[ ogVertCount :ogVertCount + int( numVertsPerFace)])
                 ogVertCount += numVertsPerFace
                 newVertCount += numVertsPerFace
             else: # ngon triangulation 
@@ -491,10 +417,10 @@ class Reader:
                 # [x] actual attribs will be recalculated after indices are modified
                 #     a return new to old mapping array is required after this operation
                 ngonVertexOffset = 0
-                for each_new_triangle in range( 0, numVertsPerFace - 2 ): # [x] decimating ngons results in this number of triangles 
+                for each_new_triangle in range( 0, numVertsPerFace - 2): # [x] decimating ngons results in this number of triangles 
 
                     # append new triangles
-                    newVertexCounts.append( 3 )
+                    newVertexCounts.append( 3)
                     newVertexIndices.append( int( npFaceVertexIndices[ ogVertCount + 0 ] ))
                     newVertexIndices.append( int( npFaceVertexIndices[ ogVertCount + ngonVertexOffset + 1]))
                     newVertexIndices.append( int( npFaceVertexIndices[ ogVertCount + ngonVertexOffset + 2]))
@@ -519,13 +445,12 @@ class Reader:
 
     ##
     def getMesh( self, 
-                 _prim = False, 
-                 _timeCode = False, 
-                 _faceVertexCounts = False,
-                 _faceVertexIndices = False,
-                 _usdNormals = False,
-                 _usdPoints = False,
-                 _usdTxcoords = False,
+                 _prim = False,              #UsdPrim
+                 _faceVertexCounts = False,  #int[]
+                 _faceVertexIndices = False, #int[]
+                 _usdNormals = False,        #vec3f
+                 _usdPoints = False,         #vec3f
+                 _usdTxcoords = False,       #vec3f
                ):
         # ================================================
         # * USD stores faceVertexIndices as a one dimensional list mixing tris, quads, and ngons
@@ -533,10 +458,11 @@ class Reader:
         # This code avoids using Python loops and instead uses numpy methods to mold the data into a Bella
         # friendly format ( vectorized processing)
         # by putting data into numpy arrays, indexing and processing will be simplified
+        # - [ ] WARNING: snapshot of mesh on frame 1 meaning no animated topology changes 
         if _prim: usdGeom = UsdGeom.Mesh( _prim)
         if _prim:
             ### faceVertexCounts = _prim.GetAttribute( 'faceVertexCounts' ).Get( time = _timeCode )
-            faceVertexCounts = usdGeom.GetFaceVertexCountsAttr().Get( time = _timeCode)
+            faceVertexCounts = usdGeom.GetFaceVertexCountsAttr().Get( time = 1)
         else: ## unittest
             faceVertexCounts = _faceVertexCounts
 
@@ -545,16 +471,15 @@ class Reader:
             return False, False, False, False, False, False
 
         if _prim:
-            usdPoints = _prim.GetAttribute( 'points').Get( time = _timeCode) # array of points and their positions
-            faceVertexIndices = usdGeom.GetFaceVertexIndicesAttr().Get( time = _timeCode)
+            usdPoints = _prim.GetAttribute( 'points').Get( 1) # array of points and their positions
+            faceVertexIndices = usdGeom.GetFaceVertexIndicesAttr().Get( 1)
         else: ## unittest
             usdPoints = _usdPoints
             faceVertexIndices = _faceVertexIndices
 
         # TEXCOORDS
         # =========
-        # Deal with usda's multitude of attribute names where uv coords can be stored
-        # [x] Use primvar relationship in USD to determine attribute name
+        # [x] Use primvar relationship in USD to determine attribute name for texcoords
         # [ 2024 ] found Scales_baby.usda output with multiple UV texcoords2f primvars:body primvars:head
         # [ 2024 ] Blender USD export supports one texture, multiple UV channels ( useful to increase texel density as needed)
         #           Required a mix node for image texture and 2 uvmap nodes
@@ -562,10 +487,10 @@ class Reader:
             dynTxcoordString = 'st' ### fallback 
             if _prim.HasRelationship( 'material:binding'): ### Is there a material bound to this prim?
                 materialRelationship = _prim.GetRelationship( 'material:binding')
-                materialSdfPath = materialRelationship.GetTargets()[0]
+                materialSdfPath = materialRelationship.GetTargets()[ 0]
                 materialPrim = self.stage.GetPrimAtPath( materialSdfPath)
                 for materialShaderPrims in Usd.PrimRange( materialPrim): ## local traversal
-                    infoId = UsdShade.Shader(materialShaderPrims).GetIdAttr().Get()
+                    infoId = UsdShade.Shader( materialShaderPrims).GetIdAttr().Get()
                     if infoId == 'UsdPrimvarReader_float2':
                         usdShadeInput = UsdShade.Shader( materialShaderPrims).GetInput( 'varname') ## resolve to input name
                         ### Get sdfPath to another prim where value is stored
@@ -573,28 +498,24 @@ class Reader:
                         connect2 = usdShadeInput.GetAttr().GetConnections()
                         ### Returns list of input connections
                         if len(connect2) == 1: # input
-                            sdfPath2 = usdShadeInput.GetAttr().GetConnections()[0] # assuming single connection world 
-                            matPrim2 = self.stage.GetPrimAtPath(sdfPath2.GetPrimPath()) ### Get UsdPrima that at end of this connection
-                            dynTxcoordString = matPrim2.GetAttribute(sdfPath2.name).Get() ### UsdPrim.GetAttribute(  ) 
+                            sdfPath2 = usdShadeInput.GetAttr().GetConnections()[ 0] # naive assumption that connections to only one leaf node, otherwise we need a full tree search
+                            matPrim2 = self.stage.GetPrimAtPath( sdfPath2.GetPrimPath()) ### Get UsdPrima that at end of this connection
+                            dynTxcoordString = matPrim2.GetAttribute( sdfPath2.name).Get() ### UsdPrim.GetAttribute(  ) 
                         else: # local value stored on input
                             dynTxcoordString = usdShadeInput.Get()
 
             ### 2024 material binding
-            materialBinding =  _prim.GetRelationship('material:binding')
-            if materialBinding.GetTargets():
-                materialSdfPath = materialBinding.GetTargets()[ 0]
-                materialPrim = self.stage.GetPrimAtPath( materialSdfPath)
-                if materialPrim: ### if null then this material may be deactivated
-                    #print('uuumat', materialSdfPath, type( materialSdfPath), materialPrim)
-                    foo = 1
-
+            ###materialBinding =  _prim.GetRelationship('material:binding')
+            ###if materialBinding.GetTargets():
+            ###    materialSdfPath = materialBinding.GetTargets()[ 0]
+            ###    materialPrim = self.stage.GetPrimAtPath( materialSdfPath)
 
         ### Look for txccords with explicit indices
         explicitTxcoordIndices = False  
         usdTxcoords = False
         if _prim: 
             if _prim.GetAttribute( 'primvars:' + dynTxcoordString).IsValid():  # houdini, blender, maya
-                usdTxcoords = _prim.GetAttribute( 'primvars:' + dynTxcoordString).Get( time = _timeCode)
+                usdTxcoords = _prim.GetAttribute( 'primvars:' + dynTxcoordString).Get( 1)
                 if _prim.GetAttribute( 'primvars:' + dynTxcoordString + ':indices').IsValid(): # maya stores explicit indices
                     # Maya writes usd with explicit texcoord indices while Blender and Houdini use implicit texcoords indexing
                     # - [ ] document implicit versus explicit
@@ -608,12 +529,10 @@ class Reader:
         usdNormals = False
         if _prim:
             if _prim.GetAttribute( 'primvars:normals').IsValid(): # TODO Shouldn't access raw attrib, need pxr wrapper: same reason why texcoords was switched, may not apply in this case
-                usdNormals = _prim.GetAttribute( 'primvars:normals').Get( time = _timeCode)
+                usdNormals = _prim.GetAttribute( 'primvars:normals').Get( 1)
                 if _prim.GetAttribute( 'primvars:normals:indices').IsValid(): 
                     explicitNormalIndices = _prim.GetAttribute( 'primvars:normals:indices').Get()
             elif _prim.GetAttribute( 'normals').IsValid(): # TODO Shouldn't access raw attrib, need pxr wrapper
-                #print( len(_prim.GetAttribute( 'normals').Get( time = _timeCode )))
-                #usdNormals = _prim.GetAttribute( 'normals').Get( time = _timeCode )
                 usdNormals = UsdGeom.Mesh( _prim).GetNormalsAttr().Get()
                 if _prim.GetAttribute( 'normals:indices').IsValid(): 
                     explicitNormalIndices = _prim.GetAttribute( 'normals:indices').Get()
@@ -630,19 +549,19 @@ class Reader:
             if explicitTxcoordIndices: ### example tv_retro.usdz
                 if explicitNormalIndices:
                     faceVertexCounts, faceVertexIndices, explicitTxcoordIndices, explicitNormalIndices \
-                    = self.triangulate_ngons( faceVertexCounts, 
-                                              faceVertexIndices, 
-                                              explicitTxcoordIndices, 
-                                              explicitNormalIndices,
-                                            )
+                    = self.triangulateNgons( faceVertexCounts,          #int[]
+                                             faceVertexIndices,         #int[] 
+                                             explicitTxcoordIndices,    #int[]
+                                             explicitNormalIndices,     #int[]
+                                           )
                 else:
                     faceVertexCounts, faceVertexIndices, explicitTxcoordIndices \
-                    = self.triangulate_ngons( faceVertexCounts, 
-                                              faceVertexIndices, 
-                                              explicitTxcoordIndices, 
+                    = self.triangulateNgons( faceVertexCounts,          #int[]
+                                              faceVertexIndices,        #int[]
+                                              explicitTxcoordIndices,   #int[]
                                             )
             else:
-                faceVertexCounts, faceVertexIndices = self.triangulate_ngons( faceVertexCounts, faceVertexIndices)
+                faceVertexCounts, faceVertexIndices = self.triangulateNgons( faceVertexCounts, faceVertexIndices)
             npFaceVertexCounts = np.array( faceVertexCounts, dtype=np.int32) # redata nparray with triangulated version
 
         ### numpy-ify
@@ -702,9 +621,8 @@ class Reader:
         else: # no txcoords
             npTxcoords = False
 
-        # - [ ] need to verify normals
-        # - [ ] add a unit test for normals
-        # I think I disovered that we can just use npFaceVertexIndices
+        # - [ ] TODO need to verify normals
+        # - [ ] TODO add a unit test for normals
         npNormals = False
         if usdNormals: 
             if explicitNormalIndices: ## Maya tends to export explicitly indexed vertex buffers
@@ -715,7 +633,8 @@ class Reader:
                 ### - [ ] document the magic sauce
                 npNormals = np.array( usdNormals, dtype='float64')[ ( npFaceVertexIndices)]  # - [ ] split verts if needed magic sauce
         else: ### - no normals at all TODO maybe switch to bool
-            npNormals = np.zeros( [0,3], dtype='float64')
+            npNormals = False
+            #npNormals = np.zeros( [0,3], dtype='float64')
 
         return  npFaceVertexCounts, \
                 npIndicesInC4DStyle, \

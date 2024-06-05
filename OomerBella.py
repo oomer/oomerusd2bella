@@ -26,7 +26,11 @@ SOFTWARE.
 
 ## third party modules
 import numpy as np
-from pxr import Gf, UsdGeom, UsdShade, UsdLux 
+from pxr import Usd
+from pxr import Gf
+from pxr import UsdGeom
+from pxr import UsdShade
+from pxr import UsdLux 
 
 ## standard modules
 from pathlib import Path  # used for cross platform file paths
@@ -85,7 +89,9 @@ class SceneAscii:
         self.np_basis_change_mat4 = np.array( _basis_change_mat4)
 
         oomerUtility = oomUtil.Mappings()
+        oomerMaterialX = oomUtil.MaterialX()
         self.usdPreviewSurface = oomerUtility.usdPreviewSurface
+        self.mtlxSurface = oomerMaterialX.surface
 
     def setTimeCode( self, _timeCode=False):
         self.timeCode = _timeCode
@@ -365,7 +371,7 @@ class SceneAscii:
         uuid = oomUtil.uuidSanitize( _prim.GetName(), _hashSeed = _prim.GetPath())
 
         usdGeom = UsdGeom.Imageable(_prim)
-        primPurpose = usdGeom.ComputePurpose()
+        primPurpose = usdGeom.ComputePurpose() ### TODO is compyting this expensive
         primVisibility = usdGeom.GetVisibilityAttr().Get()
         if primPurpose != 'default' and primPurpose != 'render':
         #if primPurpose != 'default' and primPurpose != 'render' and primVisibility != 'invisible':
@@ -397,6 +403,29 @@ class SceneAscii:
                                _bracket = '(',
                                _nparray = np_matrix4_1d,
                              )
+
+        subset_count = 0
+        for each_subset in UsdGeom.Subset.GetAllGeomSubsets( usdGeom):
+            subset_prim =  each_subset.GetPrim()
+            subset_indices = each_subset.GetIndicesAttr().Get()
+            subset_material_bind =  subset_prim.GetRelationship('material:binding')
+            subset_mat_prim = False
+            if subset_material_bind.GetTargets():
+                subset_material_sdfpath = subset_material_bind.GetTargets()[ 0]
+                subset_mat_prim = self.usdScene.stage.GetPrimAtPath( subset_material_sdfpath)
+                if subset_mat_prim: ### if null then this material may be deactivated
+                    subset_material_name = oomUtil.uuidSanitize( subset_mat_prim.GetName(), _hashSeed = subset_mat_prim.GetPath())
+                    self.writeAttribRaw( _name = 'materials[' + str(subset_count) + '].material', _value = subset_material_name)
+                    #self.writeAttribRaw( _name = 'materials[' + str(subset_count) + '].indices', _value = 'uint32[1]{' + str( subset_count) + '}')
+                    self.writeAttribNumpy( _name = 'materials[' + str( subset_count) + '].indices',
+                                        _type = 'uint32[' + str( len( subset_indices)) + ']',
+                                        _bracket = '{',
+                                        _nparray = np.array( subset_indices)
+                                        )
+            subset_count += 1
+       
+
+
         if matPrim:
             self.writeAttribRaw( _name = 'material', _value = materialName)
 
@@ -521,9 +550,19 @@ class SceneAscii:
         name = oomUtil.uuidSanitize( primName, _hashSeed = _prim.GetPath()) 
         self.writeNode( _type = 'instancer', _uuid = name)
         self.writeAttribString( _name = 'name', _value = primName)
-        orientationBuf = self.usdScene.instancers[ _prim][ 'orientationsAttr'].Get( self.timeCode)
+        ### Assume there is always scale
         positionBuf = self.usdScene.instancers[ _prim][ 'positionsAttr'].Get( self.timeCode)
         scaleBuf = self.usdScene.instancers[ _prim][ 'scalesAttr'].Get( self.timeCode)
+        orientationBuf = self.usdScene.instancers[ _prim][ 'orientationsAttr'].Get( self.timeCode)
+        if not orientationBuf: # TODO use numpy to generate the buffer faster
+            orientationBuf =[]
+            for c in range(len( positionBuf)):
+                orientationBuf.append((0,0,0,1))
+        scaleBuf = self.usdScene.instancers[ _prim][ 'scalesAttr'].Get( self.timeCode)
+        if not scaleBuf: # TODO use numpy to make a faster buffer
+            scaleBuf =[]
+            for c in range(len( positionBuf)):
+                scaleBuf.append((1,1,1))
         listMat4 = []
         for pointNum in range(len( positionBuf)): 
             quatOrient = orientationBuf[ pointNum]
@@ -777,12 +816,108 @@ class SceneAscii:
         self.writeAttribString( _name = 'ext', _value = '.' + str(_filePath.suffix))
         self.writeAttribString( _name = 'file', _value = str(_filePath.stem))
 
+    def writeMaterialXNodes( self,
+                             _prim  = False,
+                           ):
+        primName = _prim.GetName()
+        uuid = oomUtil.uuidSanitize( primName, _hashSeed = _prim.GetPath())
+        if self.usdScene.mtlxNodes[ _prim][ 'type']  == 'ND_worleynoise3d_float':
+            self.writeNode( _type = 'noise', _uuid = uuid)
+        if self.usdScene.mtlxNodes[ _prim][ 'type']  == 'ND_image_color3':
+            self.writeNode( _type = 'fileTexture', _uuid = uuid)
+        if self.usdScene.mtlxNodes[ _prim][ 'type']  == 'ND_multiply_float':
+            self.writeNode( _type = 'scalarOp', _uuid = uuid)
+            self.writeAttribString( _name = 'operation', _value = 'multiply')
+        if self.usdScene.mtlxNodes[ _prim][ 'type']  == 'ND_add_float':
+            self.writeNode( _type = 'scalarOp', _uuid = uuid)
+            self.writeAttribString( _name = 'operation', _value = 'add')
+        if self.usdScene.mtlxNodes[ _prim][ 'type']  == 'ND_divide_float':
+            self.writeNode( _type = 'scalarOp', _uuid = uuid)
+            self.writeAttribString( _name = 'operation', _value = 'divide')
+        if self.usdScene.mtlxNodes[ _prim][ 'type']  == 'ND_subtract_float':
+            self.writeNode( _type = 'scalarOp', _uuid = uuid)
+            self.writeAttribString( _name = 'operation', _value = 'subtract')
+ 
+
+    ###
+    def writeUberMaterialFromMaterialX( self,
+                                        _prim  = False,
+                                        _forceRoughness = False,
+                                        _ignoreRoughness = False,
+                                      ):
+        primName = _prim.GetName()
+        uuid = oomUtil.uuidSanitize( primName, _hashSeed = _prim.GetPath())
+        self.writeNode( _type = 'uber', _uuid = uuid)
+        self.writeAttribString( _name = 'name', _value = primName)
+        ### USD shaders are defined in a node network
+        # USD's MaterialX and UsdShade functionality are still a work in progress
+        # https://openusd.org/release/spec_usdpreviewsurface.html  
+        # UsdPreviewSurfaces is a Physically Based Surface and supports a limited set of nodes
+        # The word Preview specifically refers to the performance nature of the shaders in a Hyrda/Storm 
+        # context for rendering 100's of thousands of objects for human animation scrubbing speeds
+        # so not specifically realtime but this means UsdPreviewSurface has no transmission
+        # found in most Path tracers and realtime engines.
+        # Converting to a Bella's material requires traversing the UsdPreviewSurface shader network 
+        # and recreating that network with Bella nodes
+        # - [x] do a basic translation to Bella uber with only texture maps and constant values
+        # - [x] support imagemaps
+        # - [ ] support normalmaps 
+        # - [ ] should ambient occlusion blend multiply with base color
+        # found UsdPreviewSurfaces were stored in a dictionary _usdScene.previewSurfaces
+        # Python dict key is ( nodeInput or attribute, UsdPrim or null) 
+
+        ### naivePrimOrVal : naive in this case because the network shader is not properly traversed
+        ### each attribute is assumed either a file texture or a local value
+        for shaderInputName in self.usdScene.mtlxSurface: # loop over all UsdPreviewSurface input names
+            if shaderInputName in self.usdScene.mtlxSurfaces[ _prim]:
+                naivePrimOrVal = self.usdScene.mtlxSurfaces[ _prim][ shaderInputName] # dict stores next shader prim or val
+                if type( naivePrimOrVal) == Gf.Vec3f:
+                    self.writeAttribRaw( _name = self.mtlxSurface[ shaderInputName],
+                                         _value = 'rgba(' + str( naivePrimOrVal[0]) +
+                                         ' ' +
+                                         str( naivePrimOrVal[1]) +
+                                         ' ' +
+                                         str( naivePrimOrVal[2]) +
+                                         ' 1 )'
+                                       )
+                elif type( naivePrimOrVal) == float:
+                    self.writeAttribFloat( _name = 'base.weight', _value = 1)
+                    #if shaderInputName in ('opacity', 'roughness'): 
+                    if shaderInputName in ('roughness'): 
+                        if _forceRoughness:
+                            shaderVal = _forceRoughness * 100
+                        else:
+                            shaderVal = naivePrimOrVal * 100
+                    else: 
+                        shaderVal = naivePrimOrVal
+                    if shaderInputName == 'metallic': 
+                        self.writeAttribFloat( _name = 'base.metallicRoughness', _value = 0.0)
+                    if not _ignoreRoughness:
+                        self.writeAttribFloat( _name = self.mtlxSurface[ shaderInputName],
+                                               _value = shaderVal,
+                                             )
+
+                elif type( naivePrimOrVal) == int:
+                    self.writeAttribUint( _name = self.mtlxSurface[ shaderInputName],
+                                          _value = naivePrimOrVal,
+                                        )
+                elif type( naivePrimOrVal) == UsdShade.Shader:
+                    if shaderInputName == 'diffuseColor': outType = '.outColor'
+                    else: outType = '.outAverage'
+                    if shaderInputName == 'metallic': 
+                        self.writeAttribFloat( _name = 'base.metallicRoughness', _value = 0)
+                    uuidTexture = oomUtil.uuidSanitize( naivePrimOrVal.GetPrim().GetName(), _hashSeed = naivePrimOrVal.GetPath())
+                    self.writeAttribConnected( _name = self.mtlxSurface[ shaderInputName],
+                                               _value = uuidTexture + outType,
+                                             )
+
     ###
     def writeUberMaterial( self,
                            _prim  = False,
                            _forceRoughness = False,
                            _ignoreRoughness = False,
                          ):
+        print('uber form usdpreview')
         primName = _prim.GetName()
         uuid = oomUtil.uuidSanitize( primName, _hashSeed = _prim.GetPath())
         self.writeNode( _type = 'uber', _uuid = uuid)
@@ -818,9 +953,21 @@ class SceneAscii:
                                             str( naivePrimOrVal[2]) +
                                             ' 1 )'
                                         )
+                    if shaderInputName == 'diffuseColor': ### temp hack to set tranmission color from UsdPreviewSurface
+                        self.writeAttribRaw( _name = 'transmission.color',
+                                                _value = 'rgba(' + str( naivePrimOrVal[0]) +
+                                                ' ' +
+                                                str( naivePrimOrVal[1]) +
+                                                ' ' +
+                                                str( naivePrimOrVal[2]) +
+                                                ' 1 )'
+                                            )
+                        self.writeAttribFloat( _name = 'transmission.depth', _value = 0)
+    
                 elif type( naivePrimOrVal) == float:
                     self.writeAttribFloat( _name = 'base.weight', _value = 1)
-                    if shaderInputName in ('opacity', 'roughness'): 
+                    #if shaderInputName in ('opacity', 'roughness'): 
+                    if shaderInputName in ('roughness'): 
                         if _forceRoughness:
                             shaderVal = _forceRoughness * 100
                         else:
@@ -961,7 +1108,7 @@ class SceneAscii:
             angle = usdLux.GetAngleAttr().Get( self.timeCode )
             self.writeAttribFloat( _name = 'size', _value = angle)
         elif bellaType in ('areaLight', 'pointLight'): 
-            self.writeAttribFloat( _name = 'multiplier', _value = 30000)
+            self.writeAttribFloat( _name = 'multiplier', _value = 10000)
 
         if bellaType == 'imageDome':
             sdfAssetPath = usdLux.GetTextureFileAttr().Get()

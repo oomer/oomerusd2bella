@@ -29,11 +29,22 @@ from pathlib import Path  # used for cross platform file paths
 import os.path
 
 ## third party modules
-from pxr import Usd, UsdGeom, UsdShade, UsdLux , Sdf, Gf
+from pxr import Usd
+from pxr import UsdGeom
+from pxr import UsdShade
+#from pxr import UsdMtlx
+
 import numpy as np
 
 ## oomer modules
 import OomerUtil as oomUtil
+
+class NodeGraph:
+    def __init__(  self,
+                ):
+        self.inputs = {}
+        self.outputs = {}
+
 
 class Reader:
     def __init__(   self, 
@@ -62,13 +73,17 @@ class Reader:
         self.scopes = {} ### TODO is a scope a grouping method?
         self.cameras = {}
         self.previewSurfaces = {}
+        self.mtlxSurfaces = {}
+        self.mtlxNodes = {}
         self.references = {}
         self.uv_textures = {}
         self.prototype_instances = {}
         self.prototype_children = []
         self.rootPrims = []
         oomerUtility = oomUtil.Mappings()
+        oomerMaterialX = oomUtil.MaterialX()
         self.usdPreviewSurface = oomerUtility.usdPreviewSurface
+        self.mtlxSurface = oomerMaterialX.surface
         ###self.udim_indices = { *() } # This defines a Python set, sets can only store a value once
         self.timeCode = False
         ### GLOBALS
@@ -240,6 +255,7 @@ class Reader:
                 # - [ ] Treat UsdPreviewSurface as a equivalent to a Bella PBR material
                 if primType == 'Material' and prim not in ignorePrim: 
                     self.previewSurfaces[ prim] = {} # [ ] one UsdPreviewSurface becomes 1 bella quickMaterial
+                    self.mtlxSurfaces[ prim] = {} # [ ] one UsdPreviewSurface becomes 1 bella quickMaterial
                     # A material probably holds a unique surface shader and then instances of UsdUVTextures
                     # to ingest the material, we populate 
 
@@ -254,6 +270,72 @@ class Reader:
                         if idAttr:
                             infoId = idAttr.Get()
                             usdShader = UsdShade.Shader( shaderNetworkPrim)
+                            #print( infoId)
+
+                            if 'ND_' == infoId[:3] or 'mtlx' == infoId[:4]:
+                                self.mtlxNodes[ prim] = {}
+                                self.mtlxNodes[ prim]['type'] = infoId
+                                print('found', infoId)
+
+
+
+
+
+                            if infoId == 'ND_standard_surface_surfaceshader':
+                                self.mtlxSurfaces[ prim][ 'shader'] = shaderNetworkPrim 
+                                for shaderAttributeName in self.mtlxSurface.keys(): # loop over this dictionary mapping usdpreviewsurface to bella uber
+                                    shaderAttribute = usdShader.GetInput( shaderAttributeName)
+                                    if shaderAttribute and shaderAttributeName != 'normal':
+                                        attribValue = shaderAttribute.Get()
+                                        connectedPrimTuple = shaderAttribute.GetConnectedSource()
+                                        if connectedPrimTuple: # Is input connected to another node
+                                            connectableAPI = connectedPrimTuple[0]
+                                            shaderPrim = UsdShade.Shader( connectableAPI.GetPrim())
+                                            infoId2 = shaderPrim.GetIdAttr().Get()
+                                            if infoId2 == 'UsdUVTexture':
+                                                ### file paths are relative to .usd file where they are defined
+                                                ### ./main.usd
+                                                ### ./textureDir/cat.png
+                                                ### ./geomDir/cat.usd
+                                                # -- ./geomdir/cat.usd is referenced is ./main.usd
+                                                # -- cat.usd uses texture with a locator string "../textureDir/cat.png"
+                                                # -- during scene composition, all prims appear under one scenegraph
+                                                # -- but "../textureDir/cat.png" 
+                                                #maybe flattewn
+
+                                                ### This is how NOT to get an attrib
+                                                ### file = Usd.Prim.GetAttribute( each.GetAttribute( 'inputs:file'))
+                                                ### this gets a raw string and is inappropriate because we need
+                                                ### sdfAssetPath.resolvedPath because the raw string will either be relative OR absolute
+
+                                                sdfAssetPath = shaderPrim.GetInput( 'file').Get() ### shader <- input <- sdfAssetPath
+                                                absFilePath = sdfAssetPath.resolvedPath ### total API confusion, this attrib not documented, got by trying to use GetResolvedPath() and API suggested resolvedPath
+                                                relFilePath = sdfAssetPath.path
+                                                ### My newbie c++ brain finally figured out that .path and .resolvedPath
+                                                ### SDF_API SdfAssetPath ( const std::string & 	path,
+                                                ###                        const std::string & 	resolvedPath 
+                                                ###                      )	
+                                                if ( self.file.parent != Path( absFilePath)): ### Use relative path unless in same dir
+                                                    ### pathlib relative_to files
+                                                    ### ValueError: '/Users/harvey/oomerusd2bella/tv_retro/0/tv_retro_body_bc.png' is not in the subpath of '/Users/harvey/oomerusd2bella/houdini' OR one path is relative and the other is absolute. 
+                                                    #file = Path(os.path.relpath( absFilePath, self.file.parent.resolve()))
+                                                    file = Path( absFilePath)
+                                                    #file = Path( absFilePath).relative_to( self.file.parent.resolve()) ### calculate texture relative to -usdfile path
+                                                else:
+                                                    file = Path( relFilePath)
+                                                sourceColorSpace = usdShader.GetInput( 'sourceColorSpace').Get()
+                                                wrapS = shaderPrim.GetInput( 'wrapS').Get()
+                                                wrapT = shaderPrim.GetInput( 'wrapT').Get()
+                                                self.uv_textures[ shaderPrim] = {} # [ ] one UsdUvTexture becomes 1 bella fileTexture
+                                                self.uv_textures[ shaderPrim][ 'file'] = file
+                                                self.uv_textures[ shaderPrim][ 'wrapS'] = wrapS
+                                                self.uv_textures[ shaderPrim][ 'wrapT'] = wrapT
+                                                self.uv_textures[ shaderPrim][ '_bellatype'] = 'fileTexture'
+                                            #if infoId == 'UsdPrimvarReader_float2':
+                                            #    print( 'hello', usdShade3.GetInput('varname').Get())
+                                            self.mtlxSurfaces[ prim][ shaderAttributeName] = shaderPrim
+                                        else: # store local value
+                                            self.mtlxSurfaces[ prim][ shaderAttributeName] = attribValue
 
                             if infoId == 'UsdPreviewSurface':
                                 self.previewSurfaces[ prim][ 'shader'] = shaderNetworkPrim # TODO is 'shader' referenced
@@ -367,6 +449,7 @@ class Reader:
                           _faceVertexIndices, # int[] 
                           _txcoordIndices = False, # int[]
                           _normalIndices = False, # int[]
+                          _subsetIndices = False, # int{[],[]}
                         ):
 
         ### feed original usd arrays, returns modfified usd arrays
@@ -375,6 +458,9 @@ class Reader:
         # in this case we take the 4th polygon and triangulate to 3,3,3
         # og_vertex_indices [ 0,1,2, 0,2,3, 3,4,5,6, 7,8,9,10,11, 12,13,14,15, 16,17,19 ] faceVertexIndices
         # -> [ 0,1,2, 0,2,3, 3,4,5,6, 7,8,9, 7,9,10, 7,10,11, 12,13,14,15, 16,17,19]
+        ### TODO - [ ] add support for subset indices since triangulate ngons changes indices
+        ### take faceVertexCount ie [ 5,5,4,4,4,4] which becomes [ 3,3,3,3,3,3,4,4,4,4]
+        ### subsindices was [ 1,2,3,5] and [ 0,4] becomes [ 3,4,5,6,7,9] [ 0,1,2,8]
 
         npFaceVertexIndices  = np.array( _faceVertexIndices)  #convert to nparray so we can use slicing
         if _txcoordIndices:
@@ -435,7 +521,8 @@ class Reader:
                     ngonVertexOffset += 1
                     newVertCount += 3
                 ogVertCount += numVertsPerFace
-        
+        print(_faceVertexCounts,newVertexCounts)
+
         if _txcoordIndices and _normalIndices:
             return newVertexCounts, newVertexIndices, newTxcoordIndices, newNormalIndices
         elif _txcoordIndices:
@@ -476,6 +563,29 @@ class Reader:
         else: ## unittest
             usdPoints = _usdPoints
             faceVertexIndices = _faceVertexIndices
+
+        ### Need to gather subset dictionary for mesh in case we need to triangulate
+        ### maybe do this after checking if there are ngons
+        subset_count = 0
+        for each_subset in UsdGeom.Subset.GetAllGeomSubsets( usdGeom):
+            subset_prim =  each_subset.GetPrim()
+            subset_indices = each_subset.GetIndicesAttr().Get()
+            subset_material_bind =  subset_prim.GetRelationship('material:binding')
+            subset_mat_prim = False
+            if subset_material_bind.GetTargets():
+                subset_material_sdfpath = subset_material_bind.GetTargets()[ 0]
+                subset_mat_prim = self.usdScene.stage.GetPrimAtPath( subset_material_sdfpath)
+                if subset_mat_prim: ### if null then this material may be deactivated
+                    subset_material_name = oomUtil.uuidSanitize( subset_mat_prim.GetName(), _hashSeed = subset_mat_prim.GetPath())
+                    self.writeAttribRaw( _name = 'materials[' + str(subset_count) + '].material', _value = subset_material_name)
+                    #self.writeAttribRaw( _name = 'materials[' + str(subset_count) + '].indices', _value = 'uint32[1]{' + str( subset_count) + '}')
+                    self.writeAttribNumpy( _name = 'materials[' + str( subset_count) + '].indices',
+                                        _type = 'uint32[' + str( len( subset_indices)) + ']',
+                                        _bracket = '{',
+                                        _nparray = np.array( subset_indices)
+                                        )
+            subset_count += 1
+
 
         # TEXCOORDS
         # =========

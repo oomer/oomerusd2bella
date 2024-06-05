@@ -41,11 +41,12 @@ SOFTWARE.
 # - [ x ] mesh deformation anim
 # - [ x ] converts Sdf.AssetPaths to relative path ( file textures only)
 # - [ x ] Usd mesh instancing -> Bella mesh instancing
+# - [ x ] UsdLux SphereLight, AreaLight( rectLight, diskLight), DiskLight
+# - [ x ] UsdCamera -> Bella camera
+# - [ x ] imageDome
+# - [ x ] Blender usda mesh instancing, chairs tested in classroom.usdc
 # - [ partial ] colorDome
-# - [ partial ] imageDome
 # - [ better ] UsdPreviewSurface -> Bella uber
-# - [ beta ] UsdLux SphereLight, AreaLight( rectLight, diskLight), DiskLight
-# - [ partial ] UsdCamera -> Bella camera
 
 ### NOTES
 ###======
@@ -54,11 +55,15 @@ SOFTWARE.
 
 ### TODO
 ###===== 
-# - [ ] split mesh along udim seams   
-# - [ ] partial MaterialX translator
-# - [ ] partial Nvidia MDL translator
+# - [ ] add UsdGeomSubset allowing different materials per face
+# - [ ] split mesh along UsdGeomSubsets as seen in apple/fender_stratocaster.usda, not compatible with subdivision
+# - [ ] partial MaterialX translator, UsdPreviewSurface does not support transmission
 # - [ ] Usd prim variants
 # - [ ] per mesh prim subdivision, not sure where flag is
+# - [ ] split mesh along udim seams, not compatible with subdivision   
+# - [ ] test animated camera
+# - [ ] UsdSkel support
+# - [ ] fStop == 0, set pinhole
 
 ### NO SUPPORT
 ###===========
@@ -80,7 +85,7 @@ start_time=time.time()
 
 ###
 parser = argparse.ArgumentParser( "oomerusd2bella")
-parser.add_argument( 'usdfile', help = "path to usd file", default = "./usd/rubbertoy.usda", type = str)
+parser.add_argument( 'usdfile', help = "path to usd file", default = "", type = str)
 parser.add_argument( '-start', dest = "start", help = "sequence start frame", default = 0, type = int)
 parser.add_argument( '-end', dest = "end", help = "sequence end frame", default = 0, type = int)
 parser.add_argument( '-debug', action = 'store_true') 
@@ -224,6 +229,15 @@ for timeCode in range( startFrame, endFrame, 1):  # usd timecode starts on frame
                                     _ignoreRoughness = args.ignoreroughness,
                                  )
 
+        for prim in usdScene.mtlxSurfaces.keys(): 
+            bsa.writeUberMaterialFromMaterialX(  _prim = prim)
+
+        for prim in usdScene.mtlxNodes.keys(): 
+            bsa.writeMaterialXNodes(  _prim = prim)
+            #if usdScene.mtlxNodes[ prim][ 'type'] == 'ND_worleynoise3d_float':
+            #    print( 'found worley')
+
+
     ### USDUVTEXTURE
     ###============= 
     ### usd file string surrounded by @
@@ -236,11 +250,12 @@ for timeCode in range( startFrame, endFrame, 1):  # usd timecode starts on frame
                             #_primitives = usdScene.primitives, 
                             #_xformCache = usdScene.xform_cache,
                           )
-
+    
     for prim in usdScene.instancers.keys():
         bsa.writePointInstance( _prim = prim,
                                 #_instancers = usdScene.instancers[ prim], 
                               )
+    
     # not sure how I can tell that a file is used as a normalmap
     #for usd_prim in usdScene.uv_textures.keys(): # write out usd uv textures as bella file textures
     #    bsa.write_normal_texture(   usd_prim, 

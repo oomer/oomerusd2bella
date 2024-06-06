@@ -538,6 +538,7 @@ class Reader:
                  _usdNormals = False,        #vec3f
                  _usdPoints = False,         #vec3f
                  _usdTxcoords = False,       #vec3f
+                 _timeCode = 1,      
                ):
         # ================================================
         # * USD stores faceVertexIndices as a one dimensional list mixing tris, quads, and ngons
@@ -549,7 +550,7 @@ class Reader:
         if _prim: usdGeom = UsdGeom.Mesh( _prim)
         if _prim:
             ### faceVertexCounts = _prim.GetAttribute( 'faceVertexCounts' ).Get( time = _timeCode )
-            faceVertexCounts = usdGeom.GetFaceVertexCountsAttr().Get( time = 1)
+            faceVertexCounts = usdGeom.GetFaceVertexCountsAttr().Get( time = _timeCode)
         else: ## unittest
             faceVertexCounts = _faceVertexCounts
 
@@ -558,8 +559,8 @@ class Reader:
             return False, False, False, False, False, False
 
         if _prim:
-            usdPoints = _prim.GetAttribute( 'points').Get( 1) # array of points and their positions
-            faceVertexIndices = usdGeom.GetFaceVertexIndicesAttr().Get( 1)
+            usdPoints = _prim.GetAttribute( 'points').Get( time = _timeCode ) # array of points and their positions
+            faceVertexIndices = usdGeom.GetFaceVertexIndicesAttr().Get( time = _timeCode)
         else: ## unittest
             usdPoints = _usdPoints
             faceVertexIndices = _faceVertexIndices
@@ -569,7 +570,7 @@ class Reader:
         subset_count = 0
         for each_subset in UsdGeom.Subset.GetAllGeomSubsets( usdGeom):
             subset_prim =  each_subset.GetPrim()
-            subset_indices = each_subset.GetIndicesAttr().Get()
+            subset_indices = each_subset.GetIndicesAttr().Get( time =  _timeCode)
             subset_material_bind =  subset_prim.GetRelationship('material:binding')
             subset_mat_prim = False
             if subset_material_bind.GetTargets():
@@ -625,11 +626,11 @@ class Reader:
         usdTxcoords = False
         if _prim: 
             if _prim.GetAttribute( 'primvars:' + dynTxcoordString).IsValid():  # houdini, blender, maya
-                usdTxcoords = _prim.GetAttribute( 'primvars:' + dynTxcoordString).Get( 1)
+                usdTxcoords = _prim.GetAttribute( 'primvars:' + dynTxcoordString).Get( time = _timeCode)
                 if _prim.GetAttribute( 'primvars:' + dynTxcoordString + ':indices').IsValid(): # maya stores explicit indices
                     # Maya writes usd with explicit texcoord indices while Blender and Houdini use implicit texcoords indexing
                     # - [ ] document implicit versus explicit
-                    explicitTxcoordIndices = _prim.GetAttribute( 'primvars:' + dynTxcoordString + ':indices').Get()
+                    explicitTxcoordIndices = _prim.GetAttribute( 'primvars:' + dynTxcoordString + ':indices').Get( time = _timeCode)
         else: ## unittest
             usdTxcoords = _usdTxcoords
  
@@ -639,13 +640,13 @@ class Reader:
         usdNormals = False
         if _prim:
             if _prim.GetAttribute( 'primvars:normals').IsValid(): # TODO Shouldn't access raw attrib, need pxr wrapper: same reason why texcoords was switched, may not apply in this case
-                usdNormals = _prim.GetAttribute( 'primvars:normals').Get( 1)
+                usdNormals = _prim.GetAttribute( 'primvars:normals').Get( time = _timeCode)
                 if _prim.GetAttribute( 'primvars:normals:indices').IsValid(): 
-                    explicitNormalIndices = _prim.GetAttribute( 'primvars:normals:indices').Get()
+                    explicitNormalIndices = _prim.GetAttribute( 'primvars:normals:indices').Get( time = _timeCode)
             elif _prim.GetAttribute( 'normals').IsValid(): # TODO Shouldn't access raw attrib, need pxr wrapper
-                usdNormals = UsdGeom.Mesh( _prim).GetNormalsAttr().Get()
+                usdNormals = UsdGeom.Mesh( _prim).GetNormalsAttr().Get( time = _timeCode)
                 if _prim.GetAttribute( 'normals:indices').IsValid(): 
-                    explicitNormalIndices = _prim.GetAttribute( 'normals:indices').Get()
+                    explicitNormalIndices = _prim.GetAttribute( 'normals:indices').Get( time = _timeCode)
             else:
                 usdNormals = _usdNormals
         else:

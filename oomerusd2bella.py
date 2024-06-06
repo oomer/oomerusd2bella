@@ -149,7 +149,7 @@ for timeCode in range( startFrame, endFrame, 1):  # usd timecode starts on frame
             npPoints, \
             npNormals, \
             npTxcoords, \
-            = usdScene.getMesh( _prim = prim)
+            = usdScene.getMesh( _prim = prim, _timeCode = timeCode )
         else:
             try: # Bypass prims that crash with calls to pxr API 
                 npFaceVertexCount, \
@@ -157,7 +157,7 @@ for timeCode in range( startFrame, endFrame, 1):  # usd timecode starts on frame
                 npPoints, \
                 npNormals, \
                 npTxcoords \
-                = usdScene.getMesh( _prim = prim)
+                = usdScene.getMesh( _prim = prim, _timeCode = timeCode)
                 if not isinstance( npFaceVertexCount, np.ndarray): 
                     continue # return var == False indicates BAD ( ie zero faces ) geometry .. skip
             except:
